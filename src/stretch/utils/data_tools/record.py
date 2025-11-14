@@ -92,6 +92,8 @@ class FileDataRecorder:
         self,
         ee_rgb: np.ndarray,
         ee_depth: np.ndarray,
+        ee_cam_pose: np.ndarray,
+        ee_cam_K: np.ndarray,
         xyz: np.ndarray,
         quaternion: np.ndarray,
         gripper: float,
@@ -99,6 +101,8 @@ class FileDataRecorder:
         ee_rot: np.ndarray,
         observations: Dict[str, float],
         actions: Dict[str, float],
+        head_cam_pose: np.ndarray,
+        head_cam_K: np.ndarray,
         head_rgb: Optional[np.ndarray] = None,
         head_depth: Optional[np.ndarray] = None,
     ):
@@ -108,10 +112,14 @@ class FileDataRecorder:
         self.head_rgbs.append(head_rgb)
         self.head_depths.append(head_depth)
         self.data_dicts[self.step] = {
+            "step": self.step,
             "xyz": xyz.tolist(),
+            "ee_cam_pose": ee_cam_pose.tolist(),
+            "ee_cam_K": ee_cam_K.tolist(),
+            "head_cam_pose": head_cam_pose.tolist(),
+            "head_cam_K": head_cam_K.tolist(),
             "quats": quaternion.tolist(),
             "gripper": gripper,
-            "step": self.step,
             "ee_pos": ee_pos.tolist(),
             "ee_rot": ee_rot.tolist(),
             "observations": observations,

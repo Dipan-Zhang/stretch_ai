@@ -434,9 +434,16 @@ class ZmqRos2Leader:
                 gripper_depth_image = (
                     observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
                 )
+                # print('gripper cam shape', gripper_color_image.shape)
+                gripper_cam_pose = observation.ee_camera_pose
+                gripper_cam_K = observation.ee_camera_K
 
                 head_color_image = cv2.cvtColor(observation.rgb, cv2.COLOR_RGB2BGR)
+                # print('head cam shape', head_color_image.shape)
+                # print('depth scaling', observation.depth_scaling)
                 head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
+                head_cam_pose = observation.camera_pose
+                head_cam_K = observation.camera_K
 
                 if display_received_images:
                     # change depth to be h x w x 3
@@ -588,11 +595,15 @@ class ZmqRos2Leader:
                             self._recorder.add(
                                 ee_rgb=gripper_color_image,
                                 ee_depth=gripper_depth_image,
+                                ee_cam_pose=gripper_cam_pose,
+                                ee_cam_K=gripper_cam_K,
                                 xyz=goal_dict["relative_gripper_position"],
                                 quaternion=goal_dict["relative_gripper_orientation"],
                                 gripper=goal_dict["grip_width"],
                                 head_rgb=head_color_image,
                                 head_depth=head_depth_image,
+                                head_cam_pose=head_cam_pose,
+                                head_cam_K=head_cam_K,
                                 observations=joint_states,
                                 actions=goal_configuration,
                                 ee_pos=observation.ee_camera_pose,
