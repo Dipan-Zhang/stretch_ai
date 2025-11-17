@@ -20,6 +20,7 @@ from scipy.spatial.transform import Rotation
 
 from stretch.motion.base import IKSolverBase
 from stretch.motion.constants import MANIP_STRETCH_URDF, STRETCH_GRASP_FRAME, STRETCH_HOME_Q
+import stretch.motion.constants as constants
 from stretch.motion.pinocchio_ik_solver import PinocchioIKSolver, PositionIKOptimizer
 from stretch.motion.robot import Footprint
 
@@ -115,12 +116,18 @@ class HelloStretchKinematics:
             10.0,  # head - TODO handle this better
         ]
     )
-    # look_at_ee = np.array([-np.pi/2, -np.pi/8])
-    look_at_ee = np.array([-np.pi / 2, -np.pi / 4])
-    look_front = np.array([0.0, math.radians(-30)])
-    look_ahead = np.array([0.0, 0.0])
-    look_close = np.array([0.0, math.radians(-45)])
-    look_down = np.array([0.0, math.radians(-58)])
+    # look_at_ee = np.array([-np.pi/2, -np.pi/8]
+    # look_at_ee = np.array([-np.pi / 2, -np.pi / 4])
+    # look_front = np.array([0.0, math.radians(-30)])
+    # look_ahead = np.array([0.0, 0.0])
+    # look_close = np.array([0.0, math.radians(-45)])
+    # look_down = np.array([0.0, math.radians(-58)])
+
+    look_at_ee = constants.look_at_ee
+    look_front = constants.look_front
+    look_ahead = constants.look_ahead
+    look_close = constants.look_close
+    look_down = constants.look_down
 
     max_arm_height = 1.2
 
