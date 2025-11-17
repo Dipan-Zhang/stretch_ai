@@ -111,7 +111,7 @@ class ROS2LfdLeader:
                 )
                 head_color_image = cv2.cvtColor(observation.rgb, cv2.COLOR_RGB2BGR)
                 head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
-
+                print('gripper_color_image shape', gripper_depth_image.shape)
                 # Clip and normalize depth
                 gripper_depth_image = dobbe_format.clip_and_normalize_depth(
                     gripper_depth_image, self.depth_filter_k
@@ -251,6 +251,10 @@ class ROS2LfdLeader:
 
                     # Record episode if enabled
                     self._recorder.add(
+                        ee_cam_pose=observation.ee_camera_pose,
+                        ee_cam_K=observation.ee_camera_K,
+                        head_cam_pose=observation.camera_pose,
+                        head_cam_K=observation.camera_K,
                         ee_rgb=gripper_color_image,
                         ee_depth=gripper_depth_image,
                         xyz=np.array([0]),
