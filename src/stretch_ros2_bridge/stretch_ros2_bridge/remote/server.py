@@ -304,8 +304,8 @@ class ZmqServer(BaseZmqServer):
 @click.option("--send_port", default=4401, help="Port to send observations to")
 @click.option("--recv_port", default=4402, help="Port to receive actions from")
 @click.option("--local", is_flag=True, help="Run code locally on the robot.")
-@click.option("--image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
-@click.option("--ee_image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--ee_image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
 def main(
     send_port: int = 4401,
     recv_port: int = 4402,
