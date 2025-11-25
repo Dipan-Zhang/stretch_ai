@@ -177,12 +177,12 @@ class PinocchioIKSolver(IKSolverBase):
         return placement_frame2.inverse() * placement_frame1
 
     def compute_fk(
-        self, config: np.ndarray, link_name: str = None, ignore_missing_joints: bool = False
+        self, config: Union[np.ndarray, dict], link_name: str = None, ignore_missing_joints: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Given joint values, return end-effector position and quaternion associated with it.
 
         Args:
-            config: joint values
+            config: joint values or dictionary of joint values
             link_name: name of the link to compute FK for; if None, uses the end-effector link
 
         Returns:

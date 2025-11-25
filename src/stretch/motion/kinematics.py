@@ -24,6 +24,7 @@ import stretch.motion.constants as constants
 from stretch.motion.pinocchio_ik_solver import PinocchioIKSolver, PositionIKOptimizer
 from stretch.motion.robot import Footprint
 
+#! be aware there're multiple joint orders (manip, policy etc)
 
 # used for mapping joint states in STRETCH_*_Q to match the sim/real joint action space
 def map_joint_q_state_to_action_space(q):
