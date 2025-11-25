@@ -600,14 +600,13 @@ class ZmqRos2Leader:
                                 xyz=goal_dict["relative_gripper_position"],
                                 quaternion=goal_dict["relative_gripper_orientation"],
                                 gripper=goal_dict["grip_width"],
+                                observations=joint_states,
+                                actions=goal_configuration,
+                                ee_pose=observation.ee_pose,
+                                head_cam_K=head_cam_K,
                                 head_rgb=head_color_image,
                                 head_depth=head_depth_image,
                                 head_cam_pose=head_cam_pose,
-                                head_cam_K=head_cam_K,
-                                observations=joint_states,
-                                actions=goal_configuration,
-                                ee_pos=observation.ee_camera_pose,
-                                ee_rot=observation.ee_camera_pose,
                             )
 
                             # Record waypoint
