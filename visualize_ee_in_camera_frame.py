@@ -85,70 +85,81 @@ def project_end_effector_in_cam(recordings_dict: dict, frame_idx: int, future_st
         return projected_pixel_list, pts_ee_list
 
 ### Kinematics
-def visualize_joint_states(recordings_dict: dict, robot_kinematics: HelloStretchKinematics, frame_idx: int, future_steps: int = 0, camera_name: str = 'head') -> list[np.ndarray]:
-    projected_pixel_list = []
-    pts_ee_list = []
-    first_frame_data = recordings_dict[str(frame_idx)]
-    if camera_name == 'gripper':
-        T_base_cam = np.array(first_frame_data['ee_cam_pose'])
-        cam_K = np.array(first_frame_data['ee_cam_K'])
-    elif camera_name == 'head':
-        T_base_cam = np.array(first_frame_data['head_cam_pose'])
-        cam_K = np.array(first_frame_data['head_cam_K'])
-    else:
-        raise ValueError(f"Invalid camera frame name: {camera_name}. Must be 'gripper' or 'head'")
-    T_cam_base = np.linalg.inv(T_base_cam)
-
-    for i in range(future_steps):
-        frame_data = recordings_dict[str(frame_idx + i)]
-        
-        # Extract recorded EE pose from matrix
-        ee_pose_matrix = np.array(frame_data['ee_pos'])
-        recorded_pos, recorded_quat = extract_pose_from_matrix(ee_pose_matrix)
-        
-        # Build joint state from observations
-        observations = frame_data['observations']
-        joint_state = observations_to_joint_state(observations)
-        
-        # Compute FK
-        fk_pos, fk_quat = robot_kinematics.manip_fk(joint_state, 'gripper_camera_color_optical_frame')
+class FKVisualizer:
+    def __init__(self, urdf_path: str = ''):
+        self.robot_kinematics = HelloStretchKinematics(
+            urdf_path=urdf_path,
+            ik_type='pinocchio',
+            manip_mode_controlled_joints=None,
+        )
     
-        projected_pixel, pts_cam = project_pts_in_cam(fk_pos.reshape(1, 3), cam_K, T_cam_base) # from base to cam
-        projected_pixel_list.append(projected_pixel[0])
-        pts_ee_list.append(pts_cam)
-    return projected_pixel_list, pts_ee_list
+    def visualize(self, recordings_dict: dict, frame_idx: int, future_steps: int = 0, camera_name: str = 'head') -> list[np.ndarray]:
+        projected_pixel_list = []
+        pts_ee_list = []
+        first_frame_data = recordings_dict[str(frame_idx)]
+        if camera_name == 'gripper':
+            T_base_cam = np.array(first_frame_data['ee_cam_pose'])
+            cam_K = np.array(first_frame_data['ee_cam_K'])
+        elif camera_name == 'head':
+            T_base_cam = np.array(first_frame_data['head_cam_pose'])
+            cam_K = np.array(first_frame_data['head_cam_K'])
+        else:
+            raise ValueError(f"Invalid camera frame name: {camera_name}. Must be 'gripper' or 'head'")
+        T_cam_base = np.linalg.inv(T_base_cam)
+
+        for i in range(future_steps):
+            frame_data = recordings_dict[str(frame_idx + i)]
+            
+            # Extract recorded EE pose from matrix
+            ee_pose_matrix = np.array(frame_data['ee_pos'])
+            recorded_pos, recorded_quat = self.extract_pose_from_matrix(ee_pose_matrix)
+            
+            # Build joint state from observations
+            observations = frame_data['observations']
+            joint_state = self.observations_to_joint_state(observations)
+            
+            # Compute FK
+            fk_pos, fk_quat = self.robot_kinematics.manip_fk(joint_state, 'gripper_camera_color_optical_frame')
+        
+            projected_pixel, pts_cam = project_pts_in_cam(fk_pos.reshape(1, 3), cam_K, T_cam_base) # from base to cam
+            projected_pixel_list.append(projected_pixel[0])
+            pts_ee_list.append(pts_cam)
+
+        return projected_pixel_list, pts_ee_list
 
 
-def extract_pose_from_matrix(T: np.ndarray):
-    """Extract position and quaternion (w, x, y, z) from 4x4 transformation matrix."""
-    pos = T[:3, 3]
-    # Use scipy.spatial.transform.Rotation to extract quaternion as (x, y, z, w)
-    from scipy.spatial.transform import Rotation as R
-    rot = R.from_matrix(T[:3, :3])
-    quat_xyzw = rot.as_quat()  # (x, y, z, w)
-    # Reorder to (w, x, y, z) to match previous convention
-    quat = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
-    return pos, quat
+    @staticmethod
+    def extract_pose_from_matrix(T: np.ndarray):
+        """Extract position and quaternion (w, x, y, z) from 4x4 transformation matrix."""
+        pos = T[:3, 3]
+        # Use scipy.spatial.transform.Rotation to extract quaternion as (x, y, z, w)
+        from scipy.spatial.transform import Rotation as R
+        rot = R.from_matrix(T[:3, :3])
+        quat_xyzw = rot.as_quat()  # (x, y, z, w)
+        # Reorder to (w, x, y, z) to match previous convention
+        quat = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+        return pos, quat
 
 
-def observations_to_joint_state(observations: dict) -> np.ndarray:
-    """Convert observations dictionary to joint state array for HelloStretchKinematics."""
-    q = np.zeros(11)  # 11 DOF: base_x, base_y, base_theta, lift, arm, gripper, wrist_roll, wrist_pitch, wrist_yaw, head_pan, head_tilt
-    
-    # Map observations to joint state indices
-    q[HelloStretchIdx.BASE_X] = observations.get('base_x', 0.0)
-    # q[HelloStretchIdx.BASE_Y] = observations.get('base_y', 0.0)
-    # q[HelloStretchIdx.BASE_THETA] = observations.get('base_theta', 0.0)
-    q[HelloStretchIdx.LIFT] = observations.get('lift', 0.0)
-    q[HelloStretchIdx.ARM] = observations.get('arm', 0.0)
-    # q[HelloStretchIdx.GRIPPER] = observations.get('gripper', observations.get('gripper_finger_right', 0.0))
-    q[HelloStretchIdx.WRIST_ROLL] = observations.get('wrist_roll', 0.0)
-    q[HelloStretchIdx.WRIST_PITCH] = observations.get('wrist_pitch', 0.0)
-    q[HelloStretchIdx.WRIST_YAW] = observations.get('wrist_yaw', 0.0)
-    q[HelloStretchIdx.HEAD_PAN] = observations.get('head_pan', 0.0)
-    q[HelloStretchIdx.HEAD_TILT] = observations.get('head_tilt', 0.0)
-    
-    return q
+    @staticmethod
+    def observations_to_joint_state(observations: dict) -> np.ndarray:
+        """Convert observations dictionary to joint state array for HelloStretchKinematics."""
+        q = np.zeros(11)  # 11 DOF: base_x, base_y, base_theta, lift, arm, gripper, wrist_roll, wrist_pitch, wrist_yaw, head_pan, head_tilt
+        
+        # Map observations to joint state indices
+        q[HelloStretchIdx.BASE_X] = observations.get('base_x', 0.0)
+        # q[HelloStretchIdx.BASE_Y] = observations.get('base_y', 0.0)
+        # q[HelloStretchIdx.BASE_THETA] = observations.get('base_theta', 0.0)
+        q[HelloStretchIdx.LIFT] = observations.get('lift', 0.0)
+        q[HelloStretchIdx.ARM] = observations.get('arm', 0.0)
+        # q[HelloStretchIdx.GRIPPER] = observations.get('gripper', observations.get('gripper_finger_right', 0.0))
+        q[HelloStretchIdx.WRIST_ROLL] = observations.get('wrist_roll', 0.0)
+        q[HelloStretchIdx.WRIST_PITCH] = observations.get('wrist_pitch', 0.0)
+        q[HelloStretchIdx.WRIST_YAW] = observations.get('wrist_yaw', 0.0)
+        q[HelloStretchIdx.HEAD_PAN] = observations.get('head_pan', 0.0)
+        q[HelloStretchIdx.HEAD_TILT] = observations.get('head_tilt', 0.0)
+        
+        return q
 
 
 if __name__ == "__main__":
@@ -181,13 +192,8 @@ if __name__ == "__main__":
     projected_pixel_list, pts_ee_list = project_end_effector_in_cam(recordings_dict, frame_idx, future_steps=future_steps, camera_name=camera_name)
     
     # set up robot kinematics and compute FK
-    robot_kinematics = HelloStretchKinematics(
-            urdf_path='',
-            ik_type='pinocchio',
-            manip_mode_controlled_joints=None,
-        )
-    
-    projected_pixel_list_FK, pts_ee_list_FK = visualize_joint_states(recordings_dict, robot_kinematics, frame_idx, future_steps=future_steps, camera_name=camera_name)
+    fk_visualizer = FKVisualizer()
+    projected_pixel_list_FK, pts_ee_list_FK = fk_visualizer.visualize(recordings_dict, frame_idx, future_steps=future_steps, camera_name=camera_name)
     
     # Visualize the end effector position on the image
     cmap = plt.get_cmap('viridis')
