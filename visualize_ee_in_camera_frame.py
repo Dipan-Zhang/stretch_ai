@@ -7,7 +7,7 @@ import os
 import json
 import viser  
 import scipy.spatial.transform as tra
-    
+from stretch.motion.kinematics import HelloStretchKinematics, HelloStretchIdx
 
 # Utility to add a coordinate frame (as line sets for axes) using viser 'add_polyline' with two-point lines
 def add_frame(server, name, T):
@@ -84,27 +84,86 @@ def project_end_effector_in_cam(recordings_dict: dict, frame_idx: int, future_st
             pts_ee_list.append(T_base_ee[:3, 3])
         return projected_pixel_list, pts_ee_list
 
-if __name__ == "__main__":
-    # Load the robot model (optional, not used in current implementation)
-    # robot = HelloStretchKinematics(urdf_path='./stretch_description_SE3_eoa_wrist_dw3_tool_sg3.urdf')
+### Kinematics
+def visualize_joint_states(recordings_dict: dict, robot_kinematics: HelloStretchKinematics, frame_idx: int, future_steps: int = 0, camera_name: str = 'head') -> list[np.ndarray]:
+    projected_pixel_list = []
+    pts_ee_list = []
+    first_frame_data = recordings_dict[str(frame_idx)]
+    if camera_name == 'gripper':
+        T_base_cam = np.array(first_frame_data['ee_cam_pose'])
+        cam_K = np.array(first_frame_data['ee_cam_K'])
+    elif camera_name == 'head':
+        T_base_cam = np.array(first_frame_data['head_cam_pose'])
+        cam_K = np.array(first_frame_data['head_cam_K'])
+    else:
+        raise ValueError(f"Invalid camera frame name: {camera_name}. Must be 'gripper' or 'head'")
+    T_cam_base = np.linalg.inv(T_base_cam)
+
+    for i in range(future_steps):
+        frame_data = recordings_dict[str(frame_idx + i)]
+        
+        # Extract recorded EE pose from matrix
+        ee_pose_matrix = np.array(frame_data['ee_pos'])
+        recorded_pos, recorded_quat = extract_pose_from_matrix(ee_pose_matrix)
+        
+        # Build joint state from observations
+        observations = frame_data['observations']
+        joint_state = observations_to_joint_state(observations)
+        
+        # Compute FK
+        fk_pos, fk_quat = robot_kinematics.manip_fk(joint_state, 'gripper_camera_color_optical_frame')
     
+        projected_pixel, pts_cam = project_pts_in_cam(fk_pos.reshape(1, 3), cam_K, T_cam_base) # from base to cam
+        projected_pixel_list.append(projected_pixel[0])
+        pts_ee_list.append(pts_cam)
+    return projected_pixel_list, pts_ee_list
+
+
+def extract_pose_from_matrix(T: np.ndarray):
+    """Extract position and quaternion (w, x, y, z) from 4x4 transformation matrix."""
+    pos = T[:3, 3]
+    # Use scipy.spatial.transform.Rotation to extract quaternion as (x, y, z, w)
+    from scipy.spatial.transform import Rotation as R
+    rot = R.from_matrix(T[:3, :3])
+    quat_xyzw = rot.as_quat()  # (x, y, z, w)
+    # Reorder to (w, x, y, z) to match previous convention
+    quat = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+    return pos, quat
+
+
+def observations_to_joint_state(observations: dict) -> np.ndarray:
+    """Convert observations dictionary to joint state array for HelloStretchKinematics."""
+    q = np.zeros(11)  # 11 DOF: base_x, base_y, base_theta, lift, arm, gripper, wrist_roll, wrist_pitch, wrist_yaw, head_pan, head_tilt
+    
+    # Map observations to joint state indices
+    q[HelloStretchIdx.BASE_X] = observations.get('base_x', 0.0)
+    # q[HelloStretchIdx.BASE_Y] = observations.get('base_y', 0.0)
+    # q[HelloStretchIdx.BASE_THETA] = observations.get('base_theta', 0.0)
+    q[HelloStretchIdx.LIFT] = observations.get('lift', 0.0)
+    q[HelloStretchIdx.ARM] = observations.get('arm', 0.0)
+    # q[HelloStretchIdx.GRIPPER] = observations.get('gripper', observations.get('gripper_finger_right', 0.0))
+    q[HelloStretchIdx.WRIST_ROLL] = observations.get('wrist_roll', 0.0)
+    q[HelloStretchIdx.WRIST_PITCH] = observations.get('wrist_pitch', 0.0)
+    q[HelloStretchIdx.WRIST_YAW] = observations.get('wrist_yaw', 0.0)
+    q[HelloStretchIdx.HEAD_PAN] = observations.get('head_pan', 0.0)
+    q[HelloStretchIdx.HEAD_TILT] = observations.get('head_tilt', 0.0)
+    
+    return q
+
+
+if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--frame_idx', type=int, default=200)
     parser.add_argument('--future_steps', type=int, default=8)
     parser.add_argument('--camera_name', type=str, default='head')
     args = parser.parse_args()
-    
-    DATA_PATH = '/home/wiss/zanr/code/stretch/data/pickup_bottle_v2/default_user/default_env/2025-11-17--20-00-01'
-    
     frame_idx = args.frame_idx
     future_steps = args.future_steps
     camera_name = args.camera_name
     
-    # Load labels.json
+    DATA_PATH = '/home/wiss/zanr/code/stretch/data/pickup_bottle_v2/default_user/default_env/2025-11-17--20-00-01'
     labels_path = os.path.join(DATA_PATH, 'labels.json')
-    if not os.path.exists(labels_path):
-        raise FileNotFoundError(f"Labels file not found: {labels_path}")
     
     with open(labels_path, 'r') as f:
         recordings_dict = json.load(f)
@@ -118,42 +177,28 @@ if __name__ == "__main__":
         camera_img = cv2.imread(camera_fn, -1)
         camera_img = cv2.cvtColor(camera_img, cv2.COLOR_BGR2RGB)
 
-    ############
-    server = viser.ViserServer()
-    print("Viser visualization running at: http://localhost:8080")
-
-    # World (base) frame at identity
-    add_frame(server, "base", np.eye(4))
-    add_frame(server, "ee", np.array(recordings_dict[str(frame_idx)]['ee_pos']))
-    add_frame(server, "cam", np.array(recordings_dict[str(frame_idx)][f'{camera_name}_cam_pose']))
-    
     # Project the end effector in the camera frame
     projected_pixel_list, pts_ee_list = project_end_effector_in_cam(recordings_dict, frame_idx, future_steps=future_steps, camera_name=camera_name)
     
+    # set up robot kinematics and compute FK
+    robot_kinematics = HelloStretchKinematics(
+            urdf_path='',
+            ik_type='pinocchio',
+            manip_mode_controlled_joints=None,
+        )
     
+    projected_pixel_list_FK, pts_ee_list_FK = visualize_joint_states(recordings_dict, robot_kinematics, frame_idx, future_steps=future_steps, camera_name=camera_name)
+    
+    # Visualize the end effector position on the image
     cmap = plt.get_cmap('viridis')
     colors = cmap(np.linspace(0, 1, len(projected_pixel_list)))
-
-    # visualize pts in viser
-
-    for i, pts_ee in enumerate(pts_ee_list):
-        server.scene.add_icosphere(
-            name=f"pts_{i}",
-            position=pts_ee.reshape(-1),
-            radius=0.05,
-            color=(colors[i][0], colors[i][1], colors[i][2]),
-        )
-
-
-    breakpoint()
-    # Visualize the end effector position on the image
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
     ax.imshow(camera_img)
     
     # Draw the projected point
     for i, (u, v) in enumerate(projected_pixel_list):
         ax.plot(u, v, 'o', markersize=15, label='End Effector', color=colors[i])
-        ax.plot(u, v, 'x', markersize=20, markeredgewidth=3, color=colors[i])
+        ax.plot(projected_pixel_list_FK[i][0], projected_pixel_list_FK[i][1], '*', markersize=15, label='End Effector', color=colors[i])
     
     # Check if point is within image bounds
     h, w = camera_img.shape[:2]
@@ -163,7 +208,6 @@ if __name__ == "__main__":
     else:
         ax.set_title(f'End Effector Projection (Frame {frame_idx}, {camera_name} camera)\n'
                     f'Pixel: ({u:.1f}, {v:.1f}) [OUT OF BOUNDS]', fontsize=14, color='red')
-    
     ax.axis('off')
     
     # Save the visualization
@@ -171,11 +215,4 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Visualization saved to: {output_path}")
-    
-    # Try to show, but don't fail if display is not available
-    try:
-        plt.show()
-    except Exception as e:
-        print(f"Could not display plot (this is OK in headless environments): {e}")
-    
     plt.close()
