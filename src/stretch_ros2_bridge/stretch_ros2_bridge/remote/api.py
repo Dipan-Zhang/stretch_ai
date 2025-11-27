@@ -452,7 +452,6 @@ class StretchClient(AbstractRobotClient):
                 quat=quat,
                 relative=relative,
                 blocking=blocking,
-                timeout=timeout
             )
         except Exception as e:
             print(f"-> Error sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}: {e}")

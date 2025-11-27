@@ -282,7 +282,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
     def get_ee_pose2(self, timeout: float = 5.0) -> np.ndarray:
         """Get the current pose of the end effector.
         Returns:
-            Tuple[np.ndarray, np.ndarray]: The position and orientation of the end effector
+            np.ndarray: 4x4 matrix, pose of the end effector
         """
         t0 = timeit.default_timer()
         with self._state_lock:
@@ -292,8 +292,6 @@ class HomeRobotZmqClient(AbstractRobotClient):
                     logger.error("Timeout waiting for state message")
                     return None, None
             ee_pose = self._state["ee_pose"]
-        breakpoint()
-        #! check the shape of ee_pose, assuming it is a 4x4 matrix
         return ee_pose
 
     def get_joint_positions(self, timeout: float = 5.0) -> np.ndarray:
