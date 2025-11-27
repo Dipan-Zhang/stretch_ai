@@ -210,6 +210,20 @@ class ZmqServer(BaseZmqServer):
                 head_tilt=head_tilt_cmd,
                 blocking=_is_blocking,
             )
+        elif "ee_pose" in action:
+            if self.verbose:
+                print(f"Moving ee pose to {action['ee_pose']['pos']}")
+            quat_cmd = action["ee_pose"].get("quat", None)
+            gripper_cmd = action.get("gripper", None)
+            relative_cmd = action.get("relative", False)
+            _is_blocking = action.get("blocking", False)
+            self.client.arm_to_ee_pose(
+                pos=action["ee_pose"]["pos"],
+                quat=quat_cmd, 
+                gripper=gripper_cmd,
+                relative=relative_cmd,
+                blocking=_is_blocking,
+            )
         elif "head_to" in action:
             # This will send head without anything else
             if self.verbose or True:

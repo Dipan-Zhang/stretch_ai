@@ -33,6 +33,7 @@ from .ros import StretchRosInterface
 
 JOINT_POS_TOL = 0.009
 JOINT_ANG_TOL = 0.03
+EE_POS_TOL = 0.01
 
 
 class StretchClient(AbstractRobotClient):
@@ -427,6 +428,52 @@ class StretchClient(AbstractRobotClient):
                 if arm_success and wrist_success:
                     break
 
+
+    def arm_to_ee_pose(
+        self,
+        pos: List[float],
+        quat: Optional[List[float]] = None,
+        gripper: float = None,
+        relative: bool = False,
+        blocking: bool = True,
+        timeout: float = 4.0,
+    ):
+        """Move the arm to a ee pose (cartesian space)"""
+        assert len(pos) == 3, "Position must be a 3D vector"
+        if quat is not None:
+            assert len(quat) == 4, "Quaternion must be a 4D vector"
+        
+        print(f"-> Sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}")
+        t0 = time.time()
+
+        try:
+            success = self.manip.goto_ee_pose(
+                pos=pos, 
+                quat=quat,
+                relative=relative,
+                blocking=blocking,
+                timeout=timeout
+            )
+        except Exception as e:
+            print(f"-> Error sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}: {e}")
+            return False
+
+        if blocking:
+            t0 = time.time()
+            while (time.time() - t0) < timeout:
+                self.manip.goto_ee_pose(
+                    pos=pos, 
+                    quat=quat,
+                    relative=relative,
+                    blocking=blocking,
+                    timeout=timeout
+                )
+                ee_pose_final = self.manip.get_ee_pose()
+                ee_err = np.array(ee_pose_final) - np.array(pos)
+                ee_success = np.allclose(ee_err, 0.0, atol=EE_POS_TOL)
+                time.sleep(0.1)
+                if ee_success:
+                    break
 
 if __name__ == "__main__":
     import rclpy
