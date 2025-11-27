@@ -1,0 +1,32 @@
+FROM hellorobotinc/stretch-install-image
+# Start from the Stretch install image
+# We need to install the ROS2 Bridge and Stretch AI package
+
+# USE BASH
+SHELL ["/bin/bash", "-c"]
+
+# Install audio libraries into docker
+USER root
+ENV LANG=en_US.UTF-8
+ENV TARGET_ROS_DISTRO=humble
+ENV WS_DIR=/home/hello-robot/ament_ws
+
+RUN apt-get update && apt-get install -y \
+    alsa-utils \
+    libasound2 \
+    libasound2-dev \
+    pulseaudio \
+    && rm -rf /var/lib/apt/lists/*
+
+USER hello-robot
+ENV HOME=/home/$USER
+
+RUN pip install --upgrade pip setuptools packaging build meson ninja
+RUN pip install "setuptools<58.2.0" wheel
+
+RUN git clone https://github.com/hello-robot/stretch_ai
+WORKDIR /home/hello-robot/stretch_ai
+RUN pip install -e src/
+
+WORKDIR ${WS_DIR}
+RUN echo "Workspace: ${WS_DIR}"
