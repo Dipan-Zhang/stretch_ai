@@ -87,6 +87,7 @@ motion:
   joint_thresholds:
     head_not_moving_tolerance: 1.0e-4
     gripper_open_threshold: 0.3
+  ee_pos_tolerance: 0.01
 
 # Exploration
 agent:

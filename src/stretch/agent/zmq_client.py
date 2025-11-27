@@ -176,6 +176,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         self._wrist_yaw_joint_tolerance = float(
             parameters["motion"]["joint_tolerance"]["wrist_yaw"]
         )
+        self._ee_pos_tolerance = float(parameters["motion"]["ee_pos_tolerance"])
 
         # Robot model
         self._robot_model = HelloStretchKinematics(
@@ -277,6 +278,23 @@ class HomeRobotZmqClient(AbstractRobotClient):
             joint_velocities = self._state["joint_velocities"]
             joint_efforts = self._state["joint_efforts"]
         return joint_positions, joint_velocities, joint_efforts
+    
+    def get_ee_pose2(self, timeout: float = 5.0) -> np.ndarray:
+        """Get the current pose of the end effector.
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: The position and orientation of the end effector
+        """
+        t0 = timeit.default_timer()
+        with self._state_lock:
+            while self._state is None:
+                time.sleep(1e-4)
+                if timeit.default_timer() - t0 > timeout:
+                    logger.error("Timeout waiting for state message")
+                    return None, None
+            ee_pose = self._state["ee_pose"]
+        breakpoint()
+        #! check the shape of ee_pose, assuming it is a 4x4 matrix
+        return ee_pose
 
     def get_joint_positions(self, timeout: float = 5.0) -> np.ndarray:
         """Get the current joint positions"""
@@ -689,6 +707,82 @@ class HomeRobotZmqClient(AbstractRobotClient):
                 steps += 1
             # sleep to prevent ros2 streaming latency
             time.sleep(0.5)
+            return False
+        return True
+    
+    def arm_to_ee_pose(
+        self,
+        pos: List[float],
+        quat: Optional[List[float]] = None,
+        gripper: float = None,
+        relative: bool = False,
+        blocking: bool = True,
+        timeout: float = 10.0,
+        verbose: bool = False,
+        reliable: bool = True,
+    ) -> bool:
+        """Move the arm to a particular end effector pose in cartesian space
+        Args:
+            pos: List[3] xyz position to move to 
+            quat: List[4] quaternion (xyzw) to move to
+            gripper: The gripper position to move to
+            relative: Whether the position is relative to the current position
+            blocking: Whether to block until the motion is complete
+            timeout: How long to wait for the motion to complete
+            verbose: Whether to print out debug information
+            reliable: Whether to resend the action if it is not received
+        Returns:
+            bool: True if the motion is complete, False otherwise
+        """
+        assert len(pos) == 3, "Position must be a 3D vector"
+        if quat is not None:
+            assert len(quat) == 4, "Quaternion must be a 4D vector"
+        if not self.in_manipulation_mode():
+            raise ValueError("Robot must be in manipulation mode to move the arm")
+        if isinstance(pos, list):
+            pos = np.array(pos)
+        
+        if pos is None:
+            assert (
+                config is not None and len(config.keys()) > 0
+            ), "Must provide desired position values as params"
+            joint_positions = self.get_joint_positions()
+            joint_angles = conversions.config_to_manip_command(joint_positions)
+            return False
+        
+        # create and send the action
+        if quat is not None:
+            _next_action = {"ee_pose": {"pos": pos, "quat": quat}}
+        else:
+            _next_action = {"ee_pose": {"pos": pos}}
+        if gripper is not None:
+            _next_action["gripper"] = gripper
+        if relative:
+            _next_action["relative"] = relative
+        _next_action["manip_blocking"] = blocking
+        self.send_action(_next_action, reliable=reliable)
+        
+        # Handle blocking
+        steps = 0
+        if blocking:
+            # wait for the motion to complete
+            t0 = timeit.default_timer()
+            while not self._finish:
+                if steps % 40 == 39:
+                    self.send_action(_next_action, reliable=reliable)
+                    if verbose:
+                        print("Resending action", pos, quat, gripper, relative)
+                
+                ee_pose = self.get_ee_pose2()
+                ee_err = np.linalg.norm(ee_pose[:3, 3] - pos)
+                if ee_err < self._ee_pos_tolerance:
+                    time.sleep(0.5)
+                    return True
+                elif timeit.default_timer() - t0 > timeout:
+                    logger.error("Timeout waiting for ee pose to move")
+                    break
+                steps += 1
+                time.sleep(0.01)
             return False
         return True
 
@@ -1330,6 +1424,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         obs = self.get_observation()
         return obs.camera_pose
 
+    #! base trajectory only
     def execute_trajectory(
         self,
         trajectory: List[np.ndarray],
