@@ -710,8 +710,8 @@ class HomeRobotZmqClient(AbstractRobotClient):
     
     def arm_to_ee_pose(
         self,
-        pos: List[float],
-        quat: Optional[List[float]] = None,
+        pos: Union[List[float], np.ndarray],
+        quat: Optional[Union[List[float], np.ndarray]] = None,
         gripper: float = None,
         relative: bool = False,
         blocking: bool = True,
@@ -735,6 +735,8 @@ class HomeRobotZmqClient(AbstractRobotClient):
         assert len(pos) == 3, "Position must be a 3D vector"
         if quat is not None:
             assert len(quat) == 4, "Quaternion must be a 4D vector"
+            if isinstance(quat, list):
+                quat = np.array(quat)
         if not self.in_manipulation_mode():
             raise ValueError("Robot must be in manipulation mode to move the arm")
         if isinstance(pos, list):
@@ -755,33 +757,31 @@ class HomeRobotZmqClient(AbstractRobotClient):
             _next_action = {"ee_pose": {"pos": pos}}
         if gripper is not None:
             _next_action["gripper"] = gripper
-        if relative:
-            _next_action["relative"] = relative
+        _next_action["relative"] = relative
         _next_action["manip_blocking"] = blocking
         self.send_action(_next_action, reliable=reliable)
-        
-        # Handle blocking
-        steps = 0
+
         if blocking:
             # wait for the motion to complete
             t0 = timeit.default_timer()
             while not self._finish:
-                if steps % 40 == 39:
-                    self.send_action(_next_action, reliable=reliable)
-                    if verbose:
-                        print("Resending action", pos, quat, gripper, relative)
+                # --- REMOVED THE RESEND LOGIC HERE ---
                 
+                # Check physical distance to goal
                 ee_pose = self.get_ee_pose2()
                 ee_err = np.linalg.norm(ee_pose[:3, 3] - pos)
+                
                 if ee_err < self._ee_pos_tolerance:
-                    time.sleep(0.5)
+                    # Optional: Add a small settling time
+                    time.sleep(0.5) 
                     return True
                 elif timeit.default_timer() - t0 > timeout:
                     logger.error("Timeout waiting for ee pose to move")
                     break
-                steps += 1
+                
                 time.sleep(0.01)
             return False
+
         return True
 
     def move_base_to(

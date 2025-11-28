@@ -435,8 +435,7 @@ class StretchClient(AbstractRobotClient):
         quat: Optional[List[float]] = None,
         gripper: float = None,
         relative: bool = False,
-        blocking: bool = True,
-        timeout: float = 4.0,
+        blocking: bool = True
     ):
         """Move the arm to a ee pose (cartesian space)"""
         assert len(pos) == 3, "Position must be a 3D vector"
@@ -444,7 +443,6 @@ class StretchClient(AbstractRobotClient):
             assert len(quat) == 4, "Quaternion must be a 4D vector"
         
         print(f"-> Sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}")
-        t0 = time.time()
 
         try:
             success = self.manip.goto_ee_pose(
@@ -454,25 +452,9 @@ class StretchClient(AbstractRobotClient):
                 blocking=blocking,
             )
         except Exception as e:
-            print(f"-> Error sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}: {e}")
+            print(f"-> Error sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}: \nError: {e}")
             return False
-
-        if blocking:
-            t0 = time.time()
-            while (time.time() - t0) < timeout:
-                self.manip.goto_ee_pose(
-                    pos=pos, 
-                    quat=quat,
-                    relative=relative,
-                    blocking=blocking,
-                    timeout=timeout
-                )
-                ee_pose_final = self.manip.get_ee_pose()
-                ee_err = np.array(ee_pose_final) - np.array(pos)
-                ee_success = np.allclose(ee_err, 0.0, atol=EE_POS_TOL)
-                time.sleep(0.1)
-                if ee_success:
-                    break
+        return success
 
 if __name__ == "__main__":
     import rclpy
