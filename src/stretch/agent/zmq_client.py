@@ -402,6 +402,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         joint_state = self.get_joint_positions()
         return joint_state[HelloStretchIdx.GRIPPER]
 
+    #!TODO: get rid of this function, compute pose using inaccurate URDF model
     def get_ee_pose(self, matrix=False, link_name=None, q=None):
         """Get the current pose of the end effector.
 
@@ -760,7 +761,10 @@ class HomeRobotZmqClient(AbstractRobotClient):
         _next_action["relative"] = relative
         _next_action["manip_blocking"] = blocking
         self.send_action(_next_action, reliable=reliable)
-
+        print(f'next action is {_next_action=}')
+        
+        # Handle blocking
+        steps = 0
         if blocking:
             # wait for the motion to complete
             t0 = timeit.default_timer()
@@ -1892,6 +1896,22 @@ def main(
         send_port=send_port,
         use_remote_computer=(not local),
     )
+
+    # test
+    ee_pose = client.get_ee_pose2()
+    print(ee_pose)
+    breakpoint()
+    client.switch_to_manipulation_mode()
+
+    client.arm_to_ee_pose(pos=ee_pose[:3,3]-[0.05,0.0,0.0], verbose=True)
+    # joint_state, joint_velocities, _ = client.get_joint_state()
+    # client.switch_to_manipulation_mode()
+    # breakpoint()
+    # joint_noise = np.zeros(joint_state.shape)
+    # joint_noise[0]+=0.1
+    # joint_noise[3]+=0.1
+    # client.arm_to(joint_noise+joint_state)
+
     client.blocking_spin(verbose=True, visualize=False)
 
 
