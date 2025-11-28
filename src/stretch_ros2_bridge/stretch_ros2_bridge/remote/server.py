@@ -217,6 +217,15 @@ class ZmqServer(BaseZmqServer):
             gripper_cmd = action.get("gripper", None)
             relative_cmd = action.get("relative", False)
             _is_blocking = action.get("blocking", False)
+            if "head_to" in action:
+                head_pan_cmd, head_tilt_cmd = action["head_to"]
+            else:
+                head_pan_cmd, head_tilt_cmd = None, None
+
+            if True: # TEMP
+                print(f"SERVER received COMMAND: ee_pose {action['ee_pose']}, gripper {gripper_cmd}")
+                print(f"SERVER received COMMAND: ee_pose {action['ee_pose']}, gripper {gripper_cmd}")
+
             self.client.arm_to_ee_pose(
                 pos=action["ee_pose"]["pos"],
                 quat=quat_cmd, 
