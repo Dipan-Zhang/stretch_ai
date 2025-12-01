@@ -28,5 +28,6 @@ RUN git clone https://github.com/hello-robot/stretch_ai
 WORKDIR /home/hello-robot/stretch_ai
 RUN pip install -e src/
 
+RUN pip install pytest
 WORKDIR ${WS_DIR}
 RUN echo "Workspace: ${WS_DIR}"
