@@ -434,10 +434,20 @@ class StretchClient(AbstractRobotClient):
         pos: List[float],
         quat: Optional[List[float]] = None,
         gripper: float = None,
+        head_pan: float = None,
+        head_tilt: float = None,
         relative: bool = False,
         blocking: bool = True
     ):
-        """Move the arm to a ee pose (cartesian space)"""
+        """Move the arm to a ee pose (cartesian space)
+        
+        Args:
+            pos: 3D position [x, y, z]
+            quat: Optional quaternion [x, y, z, w]
+            gripper: Optional gripper position
+            relative: If True, pos is relative to current EE pose
+            blocking: If True, wait for motion to complete
+        """
         assert len(pos) == 3, "Position must be a 3D vector"
         if quat is not None:
             assert len(quat) == 4, "Quaternion must be a 4D vector"
@@ -448,9 +458,18 @@ class StretchClient(AbstractRobotClient):
             success = self.manip.goto_ee_pose(
                 pos=pos, 
                 quat=quat,
+                gripper=gripper,
+                head_pan=head_pan,
+                head_tilt=head_tilt,
                 relative=relative,
                 blocking=blocking,
+                debug=True, # TEMP
             )
+            
+            if not success:
+                print(f"-> Failed to send arm to {pos=} {quat=}")
+                return False
+                
         except Exception as e:
             print(f"-> Error sending arm and gripper to {pos=} {quat=} {gripper=} {relative=}: \nError: {e}")
             return False

@@ -307,6 +307,9 @@ class StretchManipulationClient(AbstractControlModule):
         self,
         pos: List[float],
         quat: Optional[List[float]] = None,
+        gripper: float = None,
+        head_pan: float = None,
+        head_tilt: float = None,
         relative: bool = False,
         world_frame: bool = False,
         blocking: bool = True,
@@ -331,7 +334,16 @@ class StretchManipulationClient(AbstractControlModule):
             return False
 
         joint_pos = self._extract_joint_pos(full_body_cfg)
-        self.goto_joint_positions(joint_pos, blocking=blocking, debug=debug)
+
+
+        self.goto_joint_positions(
+                        joint_pos,
+                        gripper=gripper,
+                        blocking=blocking, 
+                        head_pan=head_pan,
+                        head_tilt=head_tilt,
+                        debug=debug,
+        )
 
         # Debug print
         if debug and blocking:
