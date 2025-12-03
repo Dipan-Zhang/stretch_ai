@@ -714,7 +714,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         pos: Union[List[float], np.ndarray],
         quat: Optional[Union[List[float], np.ndarray]] = None,
         gripper: float = None,
-        relative: bool = False,
+        world_frame: bool = False, 
         blocking: bool = True,
         timeout: float = 10.0,
         verbose: bool = False,
@@ -758,33 +758,11 @@ class HomeRobotZmqClient(AbstractRobotClient):
             _next_action = {"ee_pose": {"pos": pos}}
         if gripper is not None:
             _next_action["gripper"] = gripper
-        _next_action["relative"] = relative
+        _next_action["world_frame"] = world_frame
         _next_action["manip_blocking"] = blocking
         self.send_action(_next_action, reliable=reliable)
-        print(f'next action is {_next_action=}')
+        # print(f'next action is {_next_action=}')
         
-        # Handle blocking
-        steps = 0
-        if blocking:
-            # wait for the motion to complete
-            t0 = timeit.default_timer()
-            while not self._finish:
-                # --- REMOVED THE RESEND LOGIC HERE ---
-                
-                # Check physical distance to goal
-                ee_pose = self.get_ee_pose2()
-                ee_err = np.linalg.norm(ee_pose[:3, 3] - pos)
-                
-                if ee_err < self._ee_pos_tolerance:
-                    # Optional: Add a small settling time
-                    time.sleep(0.5) 
-                    return True
-                elif timeit.default_timer() - t0 > timeout:
-                    logger.error("Timeout waiting for ee pose to move")
-                    break
-                
-                time.sleep(0.01)
-            return False
 
         return True
 
