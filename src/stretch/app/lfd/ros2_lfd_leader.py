@@ -22,6 +22,7 @@ from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_sta
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
+import torch
 
 
 class ROS2LfdLeader:
@@ -252,16 +253,13 @@ class ROS2LfdLeader:
                     # Record episode if enabled
                     self._recorder.add(
                         ee_cam_pose=observation.ee_camera_pose,
-                        ee_cam_K=observation.ee_camera_K,
                         head_cam_pose=observation.camera_pose,
-                        head_cam_K=observation.camera_K,
                         ee_rgb=gripper_color_image,
                         ee_depth=gripper_depth_image,
                         xyz=np.array([0]),
                         quaternion=np.array([0]),
                         gripper=0,
-                        ee_pos=np.array([0]),
-                        ee_rot=np.array([0]),
+                        ee_pose=np.array([0]),
                         observations=joint_states,
                         actions=joint_actions,
                         head_rgb=head_color_image,
