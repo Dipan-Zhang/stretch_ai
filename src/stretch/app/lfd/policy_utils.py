@@ -14,6 +14,7 @@ from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
 from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
 from torchvision.transforms import v2
+import scipy.spatial.transform as tra
 
 SUPPORTED_POLICIES = ["act", "diffusion", "diffusion_depth", "vqbet"]
 
@@ -97,6 +98,56 @@ def prepare_state(
 
     return state
 
+
+def prepare_state_rel(observation: dict, joint_states, device: str = "cuda") -> torch.Tensor:
+    # rum state xyz, quat, gripper
+    ee_cam_pose = observation.ee_camera_pose
+    ee_cam_pos = ee_cam_pose[:3, 3]
+    ee_cam_quat = tra.Rotation.from_matrix(ee_cam_pose[:3, :3]).as_quat()
+    gripper = joint_states['gripper']
+    # breakpoint()
+    state =  [
+        ee_cam_pos[0],
+        ee_cam_pos[1],
+        ee_cam_pos[2],
+        ee_cam_quat[0],
+        ee_cam_quat[1],
+        ee_cam_quat[2],
+        ee_cam_quat[3],
+        gripper
+    ]
+
+    state = torch.from_numpy(np.array(state))
+    state = state.to(torch.float32)
+    state = state.to(device, non_blocking=True)
+    state = state.unsqueeze(0)
+
+    return state
+
+def prepare_state_abs(observation: dict, joint_states, device: str = "cuda") -> torch.Tensor:
+    # rum state xyz, quat, gripper
+    ee_pose = observation.ee_pose
+    ee_pos = ee_pose[:3, 3]
+    ee_quat = tra.Rotation.from_matrix(ee_pose[:3, :3]).as_quat()
+    gripper = joint_states['gripper']
+    # breakpoint()
+    state =  [
+        ee_pos[0],
+        ee_pos[1],
+        ee_pos[2],
+        ee_quat[0],
+        ee_quat[1],
+        ee_quat[2],
+        ee_quat[3],
+        gripper
+    ]
+
+    state = torch.from_numpy(np.array(state))
+    state = state.to(torch.float32)
+    state = state.to(device, non_blocking=True)
+    state = state.unsqueeze(0)
+
+    return state
 
 def prepare_image(image, device):
 

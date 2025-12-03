@@ -12,13 +12,14 @@ import pprint as pp
 import cv2
 import numpy as np
 import torch
-from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rum
+import scipy.spatial.transform as tra
 
+from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
 from stretch.agent.zmq_client import HomeRobotZmqClient
-from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state
+from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
@@ -75,11 +76,10 @@ class ROS2LfdLeader:
             data_dir, task_name, user_name, env_name, save_images, self.metadata
         )
         self._run_policy = False or self._force
-        self.relative_motion = True if 'rum' in policy_name else False
-
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
-
+        self.relative_motion = True # DEBUG!!
+        self.dummy_policy = False # DEBUG!!
     def ask_for_success(self) -> bool:
         """Ask the user if the episode was successful."""
         while True:
@@ -92,7 +92,15 @@ class ROS2LfdLeader:
 
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
-        loop_timer = lt.LoopStats("dex_teleop_leader")
+        loop_timer = lt.LoopStats("lfd_leader_ee")
+        First = True
+        _t_debug = 0
+        if self.dummy_policy:
+            gt_actions, init_action = load_gt_traj('/home/chenh/anran_ws/stretch_ai/data/test/default_user/default_env/2025-12-01--21-32-17/labels.json')
+        else:
+            gt_actions = None
+            init_action = None
+        
         try:
             while True:
                 loop_timer.mark_start()
@@ -114,69 +122,116 @@ class ROS2LfdLeader:
                 head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
                 print('gripper_color_image shape', gripper_depth_image.shape)
                 # Clip and normalize depth
-                gripper_depth_image = dobbe_format_rum.clip_and_normalize_depth(
+                gripper_depth_image = dobbe_format_rel.clip_and_normalize_depth(
                     gripper_depth_image, self.depth_filter_k
                 )
-                head_depth_image = dobbe_format_rum.clip_and_normalize_depth(
+                head_depth_image = dobbe_format_rel.clip_and_normalize_depth(
                     head_depth_image, self.depth_filter_k
                 )
 
-
                 self._run_policy = True
 
-                joint_actions = {}
 
                 action = None
                 if self._run_policy:
                     # Build state observations in correct format
+                    if self.relative_motion:
+                        current_state = prepare_state_rel(observation, joint_states, self.device)
+                    else:
+                        current_state = prepare_state_abs(observation, joint_states, self.device)
+
+                    current_img = prepare_image(
+                        gripper_color_image, self.device
+                    )# [:, [2,1,0]] # in RGB format
+
+                    # ### DEBUG VISUALIZE THE IMAGE
+                    _img_uint8 = (current_img[0] * 255).cpu().numpy().astype(np.uint8)
+                    _img_uint8 = np.transpose(_img_uint8, (1,2,0))
+
+                    # cv2.imshow("observation images", _img_uint8)
+                    # cv2.waitKey(1)
+
                     observations = {
-                        "observation.state": prepare_state(
-                            joint_states, self.teleop_mode, self.device
-                        ),
-                        "observation.images.gripper": prepare_image(
-                            gripper_color_image, self.device
-                        ),
+                        "observation.state": current_state,
+                        "observation.images.gripper": current_img,
                         "observation.images.head": prepare_image(head_color_image, self.device),
-                        "observation.images.gripper_depth": gripper_depth_image,
-                        "observation.images.head_depth": head_depth_image,
                     }
 
                     # Send observation to policy
-                    with torch.inference_mode():
-                        raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
+                    if not self.dummy_policy:
+                        with torch.inference_mode():
+                            raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
+                    else:
+                        if not First:
+                            raw_action = np.expand_dims(gt_actions[_t_debug-1],axis=0)
+                        else:
+                            raw_action = np.expand_dims(gt_actions[0], axis=0)
 
-                    # Get first batch
-                    action = raw_action[0].tolist()
-
-                    # use IK to get joint state from action
-
-                    # Format raw_actions to order used for arm_to
-                    # Order of raw actions is in dobbe_format.ACTION_ORDER
+                    action = raw_action[0].tolist() # [n_action, n_dim]
+                    if self.relative_motion:
+                        # Every 8 steps (new action chunk), refresh current_pose from observation
+                        # This happens at the START of a new chunk, before applying the first action
+                        # Following the pattern from test_actionchunk_rel2abs: when starting a chunk,
+                        # we need the current absolute pose, then apply all actions in the chunk sequentially
+                        if (_t_debug) % 8 == 0:
+                            # Get current absolute pose from robot (this is the pose BEFORE applying the first action of the chunk)
+                            current_pose = observation.ee_pose.copy()
+                            print(f'idx {_t_debug}: current pose refreshed for new chunk!')
+                            print(f'  Current pose position: {current_pose=}')
+                        
+                        # Ensure current_pose is initialized (shouldn't happen, but safety check)
+                        if 'current_pose' not in locals():
+                            current_pose = observation.ee_pose.copy()
+                            print(f'WARNING: current_pose not initialized, using observation.ee_pose')
+                        
+                        # Build relative transformation matrix from action
+                        # Action format: [x, y, z, qx, qy, qz, qw, gripper] (scipy uses [x, y, z, w])
+                        T_rel = np.eye(4)
+                        T_rel[:3, 3] = np.array(action[:3])  # Translation
+                        quat_action = np.array(action[3:7])  # [qx, qy, qz, qw]
+                        T_rel[:3, :3] = tra.Rotation.from_quat(quat_action).as_matrix()
+                        
+                        # Apply relative transformation: new_abs = current_abs @ T_rel
+                        # This follows the same pattern as test: current_pose @ action
+                        if First and self.dummy_policy:
+                            current_pose = current_pose
+                        else:   
+                            current_pose = current_pose @ T_rel
+                        # Extract position and quaternion from resulting absolute pose
+                        pos = current_pose[:3, 3]
+                        quat = tra.Rotation.from_matrix(current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
+                        gripper = action[7]
+                    else:
+                        pos = action[:3]
+                        quat = action[3:7]
+                        gripper = action[7]
+        
+                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, idx{_t_debug}')
                     self.robot.arm_to_ee_pose(
-                        pos = action[:3],
-                        quat = action[3:7],
-                        gripper=action[8],  # gripper
-                        relative=self.relative_motion,
+                        pos = pos,
+                        quat = quat, 
+                        gripper=gripper,  # gripper
+                        world_frame=True,
                         reliable=True,
-                        # blocking=False,
+                        blocking=True,
                     )
+                    
                 else:
                     # If we aren't running the policy, what do we even need to do?
                     continue  # Skip the rest of the loop
+                _t_debug += 1
+                First=False
 
                 if self.verbose:
                     loop_timer.mark_end()
                     loop_timer.pretty_print()
 
                 # Stop condition for forced execution
-                PITCH_STOP_THRESHOLD = -1.0
 
                 stop = False
                 PROGRESS_STOP_THRESHOLD = 0.95
-                if len(action) == 10:
-                    stop = action[9] > PROGRESS_STOP_THRESHOLD
-                else:
-                    stop = joint_actions["joint_wrist_pitch"] < PITCH_STOP_THRESHOLD
+                if len(action) == 9:
+                    stop = action[8] > PROGRESS_STOP_THRESHOLD
 
                 if self._force and stop:
                     print(f"[LEADER] Stopping policy execution")
@@ -186,21 +241,35 @@ class ROS2LfdLeader:
                         self._need_to_write = False
                         break
 
-                if self._need_to_write:
-                    if self.record_success:
-                        success = self.ask_for_success()
-                        print("[LEADER] Writing data to disk with success = ", success)
-                        self._recorder.write(success=success)
-                    else:
-                        print("[LEADER] Writing data to disk.")
-                        self._recorder.write()
-                    self._need_to_write = False
-                    if self._force:
-                        break
+                
 
         finally:
             pass
 
+import json
+def load_gt_traj(file_path: str, matrix=False) -> list[np.ndarray]:
+    with open(file_path, 'r') as f:
+        gt_dict = json.load(f)
+    gt_actions = []
+    for frame_idx in gt_dict:
+        if not matrix:
+            xyz = np.array(gt_dict[str(frame_idx)]['xyz'])
+            quat = np.array(gt_dict[str(frame_idx)]['quats'])
+            gripper = gt_dict[str(frame_idx)]['gripper']
+
+            gt_actions.append([xyz[0], xyz[1], xyz[2],quat[0],quat[1], quat[2],quat[3], gripper, 0.0])
+        else:
+
+            relative_pose = np.eye(4)
+            relative_pose[:3,3] = xyz
+            relative_pose[:3,:3] = tra.Rotation.from_quat(quat).as_matrix()
+            
+            gt_actions.append(relative_pose)
+
+    
+    init_pose_abs = np.array(gt_dict[str(0)]['xyz_abs'])
+    
+    return np.array(gt_actions), init_pose_abs
 
 if __name__ == "__main__":
     import argparse
