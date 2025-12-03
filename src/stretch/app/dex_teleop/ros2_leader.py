@@ -598,6 +598,7 @@ class ZmqRos2Leader:
                                 ee_cam_pose=observation.ee_camera_pose,
                                 xyz=goal_dict["relative_gripper_position"],
                                 quaternion=goal_dict["relative_gripper_orientation"],
+                                ee_goal_pose=goal_dict['absolute_gripper_pose'],
                                 gripper=goal_dict["grip_width"],
                                 ee_pose=observation.ee_pose,
                                 observations=joint_states,

@@ -163,6 +163,7 @@ def process_goal_dict(
         # If we need to, we can tune this to center the gripper
         # Charlie had some code which did this in a slightly nicer way, I think
         # print(T1[:3, 3])
+        goal_dict["absolute_gripper_pose"] = T1
 
     goal_dict["use_gripper_center"] = use_gripper_center
     if prev_goal_dict is not None and "gripper_orientation" in prev_goal_dict:
