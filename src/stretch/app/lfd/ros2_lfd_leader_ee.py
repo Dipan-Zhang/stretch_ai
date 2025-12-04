@@ -209,9 +209,15 @@ class ROS2LfdLeader:
                     else:
                         pos = action[:3]
                         quat = action[3:7]
-                        gripper = action[7]
+                        gripper = action[7] 
+
+                    # TEMP, remove this after adapting the dataset preparation
+                    # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
+                    GRIPPER_MIN=-0.3
+                    GRIPPER_MAX=0.6
+                    gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
         
-                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, idx{_t_debug}')
+                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]} idx{_t_debug}')
                     self.robot.arm_to_ee_pose(
                         pos = pos,
                         quat = quat, 
