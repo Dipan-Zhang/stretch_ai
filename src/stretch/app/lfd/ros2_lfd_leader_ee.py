@@ -7,7 +7,10 @@
 # Some code may be adapted from other open-source works with their respective licenses. Original
 # license information maybe found below, if so.
 
+import json
 import pprint as pp
+import os
+
 
 import cv2
 import numpy as np
@@ -23,7 +26,9 @@ from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_sta
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
-
+import stretch.app.lfd.visualize_utils as vis_utils
+import liblzfse
+import open3d as o3d 
 
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
@@ -46,6 +51,8 @@ class ROS2LfdLeader:
         depth_filter_k=None,
         disable_recording: bool = False,
         relative_motion: bool = False,
+        run_policy: bool = True,
+        visualization_data_path: str = None,
     ):
         self.robot = robot
 
@@ -69,43 +76,40 @@ class ROS2LfdLeader:
             "backend": "ros2",
         }
 
-        self._force = force_execute
         self._disable_recording = disable_recording
         self._recording = False or not self._disable_recording
         self._need_to_write = False
         self._recorder = FileDataRecorder(
             data_dir, task_name, user_name, env_name, save_images, self.metadata
         )
-        self._run_policy = False or self._force
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
         self.relative_motion = relative_motion
-        self.dummy_policy = False # DEBUG!!
+        self._run_policy = run_policy
+        self.visualize_trajectory = not self._run_policy
+        self.visualization_data_path = visualization_data_path
 
+        if self.visualize_trajectory:
+            assert self.visualization_data_path is not None, 'visualization_data_path must be provided when visualize_trajectory is enabled'
+        
         if self.relative_motion:
             assert ('rel' in policy_path) or ('rum' in policy_path), 'Policy path is for relative motion, but relative motion is disabled. Please check the policy path.'
-
-    def ask_for_success(self) -> bool:
-        """Ask the user if the episode was successful."""
-        while True:
-            logger.alert("Was the episode successful? (y/n)")
-            key = cv2.waitKey(0)
-            if key == ord("y"):
-                return True
-            elif key == ord("n"):
-                return False
 
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
         loop_timer = lt.LoopStats("lfd_leader_ee")
         First = True
         _t_debug = 0
-        if self.dummy_policy:
-            gt_actions, init_action = load_gt_traj('/home/chenh/anran_ws/stretch_ai/data/test/default_user/default_env/2025-12-01--21-32-17/labels.json')
-        else:
-            gt_actions = None
-            init_action = None
         
+        # Visualization mode: test inference with ground truth data
+        if self.visualize_trajectory:
+            if self.visualization_data_path is None:
+                raise ValueError("visualization_data_path must be provided when visualize_trajectory is enabled")
+
+            for idx in range (0, 200, 8):
+                vis_utils.visualize_trajectory(self.policy, self.relative_motion, self.visualization_data_path, idx)
+            breakpoint()
+
         try:
             while True:
                 loop_timer.mark_start()
@@ -134,7 +138,6 @@ class ROS2LfdLeader:
                     head_depth_image, self.depth_filter_k
                 )
 
-                self._run_policy = True
 
 
                 action = None
@@ -163,14 +166,8 @@ class ROS2LfdLeader:
                     }
 
                     # Send observation to policy
-                    if not self.dummy_policy:
-                        with torch.inference_mode():
-                            raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
-                    else:
-                        if not First:
-                            raw_action = np.expand_dims(gt_actions[_t_debug-1],axis=0)
-                        else:
-                            raw_action = np.expand_dims(gt_actions[0], axis=0)
+                    with torch.inference_mode():
+                        raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
 
                     action = raw_action[0].tolist() # [n_action, n_dim]
                     if self.relative_motion:
@@ -198,10 +195,7 @@ class ROS2LfdLeader:
                         
                         # Apply relative transformation: new_abs = current_abs @ T_rel
                         # This follows the same pattern as test: current_pose @ action
-                        if First and self.dummy_policy:
-                            current_pose = current_pose
-                        else:   
-                            current_pose = current_pose @ T_rel
+                        current_pose = current_pose @ T_rel
                         # Extract position and quaternion from resulting absolute pose
                         pos = current_pose[:3, 3]
                         quat = tra.Rotation.from_matrix(current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
@@ -257,7 +251,6 @@ class ROS2LfdLeader:
         finally:
             pass
 
-import json
 def load_gt_traj(file_path: str, matrix=False) -> list[np.ndarray]:
     with open(file_path, 'r') as f:
         gt_dict = json.load(f)
@@ -311,29 +304,39 @@ if __name__ == "__main__":
         "--policy_path", type=str, required=True, help="Path to folder storing model weights"
     )
     parser.add_argument("--policy_name", type=str, required=True)
+
+    parser.add_argument("--run_visualization", action="store_true", help="Run visualization only.")
     parser.add_argument("--depth-filter-k", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument(
         "--rerun", action="store_true", help="Enable rerun server for visualization."
     )
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
-    parser.add_argument("--relative-motion", action="store_true", help="Use relative motion.")
+    parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
+    parser.add_argument(
+        "--visualization_data_path",
+        type=str,
+        default=None,
+        help="Path to data directory for visualization mode (should contain compressed_gripper_images/ and labels.json)."
+    )
     args = parser.parse_args()
 
     # Parameters
     MANIP_MODE_CONTROLLED_JOINTS = dt_utils.get_teleop_controlled_joints(args.teleop_mode)
     parameters = get_parameters("default_planner.yaml")
-
     # Zmq client
-    robot = HomeRobotZmqClient(
-        robot_ip=args.robot_ip,
-        send_port=args.send_port,
-        parameters=parameters,
-        manip_mode_controlled_joints=MANIP_MODE_CONTROLLED_JOINTS,
-        enable_rerun_server=args.rerun,
-    )
-    robot.switch_to_manipulation_mode()
-    robot.move_to_manip_posture()
+    if args.run_visualization:
+        robot = None
+    else:
+        robot = HomeRobotZmqClient(
+            robot_ip=args.robot_ip,
+            send_port=args.send_port,
+            parameters=parameters,
+            manip_mode_controlled_joints=MANIP_MODE_CONTROLLED_JOINTS,
+            enable_rerun_server=args.rerun,
+        )
+        robot.switch_to_manipulation_mode()
+        robot.move_to_manip_posture()
 
     leader = ROS2LfdLeader(
         robot=robot,
@@ -350,6 +353,8 @@ if __name__ == "__main__":
         policy_path=args.policy_path,
         device=args.device,
         relative_motion=args.relative_motion,
+        visualization_data_path=args.visualization_data_path,
+        run_policy=not args.run_visualization
     )
 
     try:
