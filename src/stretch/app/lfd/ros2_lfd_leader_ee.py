@@ -45,6 +45,7 @@ class ROS2LfdLeader:
         device: str = "cuda",
         depth_filter_k=None,
         disable_recording: bool = False,
+        relative_motion: bool = False,
     ):
         self.robot = robot
 
@@ -78,8 +79,12 @@ class ROS2LfdLeader:
         self._run_policy = False or self._force
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
-        self.relative_motion = True # DEBUG!!
+        self.relative_motion = relative_motion
         self.dummy_policy = False # DEBUG!!
+
+        if self.relative_motion:
+            assert ('rel' in policy_path) or ('rum' in policy_path), 'Policy path is for relative motion, but relative motion is disabled. Please check the policy path.'
+
     def ask_for_success(self) -> bool:
         """Ask the user if the episode was successful."""
         while True:
@@ -306,6 +311,7 @@ if __name__ == "__main__":
         "--rerun", action="store_true", help="Enable rerun server for visualization."
     )
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
+    parser.add_argument("--relative-motion", action="store_true", help="Use relative motion.")
     args = parser.parse_args()
 
     # Parameters
@@ -337,6 +343,7 @@ if __name__ == "__main__":
         policy_name=args.policy_name,
         policy_path=args.policy_path,
         device=args.device,
+        relative_motion=args.relative_motion,
     )
 
     try:
