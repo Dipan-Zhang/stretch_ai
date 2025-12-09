@@ -437,6 +437,7 @@ class StretchClient(AbstractRobotClient):
         head_pan: float = None,
         head_tilt: float = None,
         relative: bool = False,
+        world_frame: bool = False,
         blocking: bool = True
     ):
         """Move the arm to a ee pose (cartesian space)
@@ -446,6 +447,7 @@ class StretchClient(AbstractRobotClient):
             quat: Optional quaternion [x, y, z, w]
             gripper: Optional gripper position
             relative: If True, pos is relative to current EE pose
+            world_frame: If True, compute IK based on world_frame/ map_frame
             blocking: If True, wait for motion to complete
         """
         assert len(pos) == 3, "Position must be a 3D vector"
@@ -463,6 +465,7 @@ class StretchClient(AbstractRobotClient):
                 head_tilt=head_tilt,
                 relative=relative,
                 blocking=blocking,
+                world_frame=world_frame,
                 debug=True, # TEMP
             )
             

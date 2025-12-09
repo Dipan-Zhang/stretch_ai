@@ -217,6 +217,7 @@ class ZmqServer(BaseZmqServer):
             gripper_cmd = action.get("gripper", None)
             relative_cmd = action.get("relative", False)
             _is_blocking = action.get("blocking", False)
+            world_frame = action.get("world_frame", False)
             if "head_to" in action:
                 head_pan_cmd, head_tilt_cmd = action["head_to"]
             else:
@@ -232,6 +233,7 @@ class ZmqServer(BaseZmqServer):
                 gripper=gripper_cmd,
                 relative=relative_cmd,
                 blocking=_is_blocking,
+                world_frame=world_frame,
             )
         elif "head_to" in action:
             # This will send head without anything else
