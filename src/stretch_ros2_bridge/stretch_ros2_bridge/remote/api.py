@@ -187,23 +187,45 @@ class StretchClient(AbstractRobotClient):
 
     @property
     def head_camera_pose(self):
-        p0 = self._ros_client.get_frame_pose(
-            self.head_camera_frame, base_frame=self.world_frame, timeout_s=5.0
-        )
+        if self._base_control_mode == ControlMode.MANIPULATION:
+            p0 = self._ros_client.get_frame_pose(
+                self.head_camera_frame, base_frame=None, timeout_s=5.0
+            ) # relative to baselink
+            p0[0] += self.manip.get_base_x()
+        else:
+            p0 = self._ros_client.get_frame_pose(
+                self.head_camera_frame, base_frame=self.world_frame, timeout_s=5.0
+            )
+        # p0 = self._ros_client.get_frame_pose(
+        #     self.head_camera_frame, base_frame=self.world_frame, timeout_s=5.0
+        # )
         if p0 is not None:
             p0 = p0 @ tra.euler_matrix(0, 0, -np.pi / 2)
         return p0
 
     @property
     def ee_camera_pose(self):
-        p0 = self._ros_client.get_frame_pose(
-            self.ee_camera_frame, base_frame=self.world_frame, timeout_s=5.0
-        )
+        if self._base_control_mode == ControlMode.MANIPULATION:
+            p0 = self._ros_client.get_frame_pose(
+                self.ee_camera_frame, base_frame=None, timeout_s=5.0
+            )
+            p0[0] += self.manip.get_base_x()
+        else:
+            p0 = self._ros_client.get_frame_pose(
+                self.ee_camera_frame, base_frame=self.world_frame, timeout_s=5.0
+            )
+        # p0 = self._ros_client.get_frame_pose(
+        #     self.ee_camera_frame, base_frame=self.world_frame, timeout_s=5.0
+        # )
         return p0
 
     @property
     def ee_pose(self):
-        p0 = self._ros_client.get_frame_pose(self.ee_frame, base_frame=self.world_frame)
+        if self._base_control_mode == ControlMode.MANIPULATION:
+            p0 = self._ros_client.get_frame_pose(self.ee_frame, base_frame=None, timeout_s=5.0)
+            p0[0] += self.manip.get_base_x()
+        else:
+            p0 = self._ros_client.get_frame_pose(self.ee_frame, base_frame=self.world_frame)
         if p0 is not None:
             p0 = p0 @ tra.euler_matrix(0, 0, 0)
         return p0
