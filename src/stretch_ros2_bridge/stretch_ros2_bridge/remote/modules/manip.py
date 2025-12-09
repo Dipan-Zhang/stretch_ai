@@ -236,6 +236,7 @@ class StretchManipulationClient(AbstractControlModule):
             self.wait()
 
     def solve_fk(self, full_body_cfg):
+        "full_body_cfg is joint configuration array"
         pos, quat = self._robot_model.manip_fk(full_body_cfg)
         return pos, quat
 
@@ -253,7 +254,7 @@ class StretchManipulationClient(AbstractControlModule):
 
         Note: When relative==True, the delta orientation is still defined in the world frame
 
-        Returns None if no solution is found, else returns an executable solution
+        Returns None if no solution is found, else returns an executable solution, joint arrary
         """
 
         pos_ee_curr, quat_ee_curr = self.get_ee_pose(world_frame=world_frame)
@@ -328,13 +329,20 @@ class StretchManipulationClient(AbstractControlModule):
             blocking: Whether command blocks until completion
             initial_cfg: Preferred (initial) joint state configuration
         """
-        full_body_cfg = self.solve_ik(pos, quat, relative, world_frame, initial_cfg, debug)
+        if debug:
+            print(f'computing ee pose using IK in manip.py, {world_frame=}') #TEMP
+        
+        full_body_cfg = self.solve_ik(pos, quat, relative, world_frame, initial_cfg, debug=True)
         if full_body_cfg is None:
             print("Warning: Cannot find an IK solution for desired EE pose!")
             return False
 
         joint_pos = self._extract_joint_pos(full_body_cfg)
-
+        
+        if debug:
+            print(f'{pos=}, {quat=}, {world_frame=}, {initial_cfg=},debug')
+            print(f"solved iK {full_body_cfg=}")
+            print(f'FINAL OUTPUT BEFORE {joint_pos=}, {gripper=}, {head_pan=}, {head_tilt=}')
 
         self.goto_joint_positions(
                         joint_pos,
