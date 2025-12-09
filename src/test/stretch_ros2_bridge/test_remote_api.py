@@ -2,9 +2,7 @@ import pathlib
 import sys
 
 import pytest
-
-np = pytest.importorskip("numpy", reason="numpy is required for stretch imports")
-
+import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
@@ -47,13 +45,19 @@ class FakeManip:
     def get_joint_positions(self):
         return self.last_joint_positions
 
-    def goto_ee_pose(self, pos, quat=None, relative=False, blocking=True):
+    def goto_ee_pose(self, pos, quat=None, gripper=None, head_pan=None, head_tilt=None, relative=False, world_frame=False, blocking=True, debug=False, initial_cfg=None):
         self.goto_ee_pose_calls.append(
             {
                 "pos": list(pos),
                 "quat": None if quat is None else list(quat),
+                "gripper": gripper,
+                "head_pan": head_pan,
+                "head_tilt": head_tilt,
                 "relative": relative,
+                "world_frame": world_frame,
                 "blocking": blocking,
+                "debug": debug,
+                "initial_cfg": initial_cfg,
             }
         )
         key = (_round_vec(pos), None if quat is None else _round_vec(quat), relative)
@@ -62,6 +66,22 @@ class FakeManip:
         self.goto_joint_positions(self.pose_to_joints[key], blocking=blocking)
         return True
 
+
+def sample_joint_positions(model) -> np.ndarray:
+    "sample joint positions within joint limits"
+    rng = np.random.default_rng(0)
+    q = np.zeros(model.dof)
+    q[HelloStretchIdx.BASE_X] = rng.uniform(-0.15, 0.15)
+    q[HelloStretchIdx.BASE_Y] = rng.uniform(-0.1, 0.1)
+    q[HelloStretchIdx.BASE_THETA] = rng.uniform(-np.pi, np.pi)
+    q[HelloStretchIdx.LIFT] = rng.uniform(0.1, 0.8)
+    q[HelloStretchIdx.ARM] = rng.uniform(0.0, 0.5)
+    q[HelloStretchIdx.GRIPPER] = rng.uniform(0.0, 1.0)
+    q[HelloStretchIdx.WRIST_ROLL] = rng.uniform(-1.0, 1.0)
+    q[HelloStretchIdx.WRIST_PITCH] = rng.uniform(-1.0, 1.0)
+    q[HelloStretchIdx.WRIST_YAW] = rng.uniform(-1.0, 1.0)
+    q[HelloStretchIdx.HEAD_PAN] = 0.0
+    q[HelloStretchIdx.HEAD_TILT] = 0.0
 
 @pytest.fixture
 def make_client():
@@ -81,19 +101,7 @@ def joint_pose_pairs():
     pairs = []
 
     for _ in range(5):
-        q = np.zeros(model.dof)
-        q[HelloStretchIdx.BASE_X] = rng.uniform(-0.15, 0.15)
-        q[HelloStretchIdx.BASE_Y] = rng.uniform(-0.1, 0.1)
-        q[HelloStretchIdx.BASE_THETA] = rng.uniform(-np.pi, np.pi)
-        q[HelloStretchIdx.LIFT] = rng.uniform(0.1, 0.8)
-        q[HelloStretchIdx.ARM] = rng.uniform(0.0, 0.5)
-        q[HelloStretchIdx.GRIPPER] = rng.uniform(-0.2, 0.4)
-        q[HelloStretchIdx.WRIST_ROLL] = rng.uniform(-1.0, 1.0)
-        q[HelloStretchIdx.WRIST_PITCH] = rng.uniform(-1.0, 1.0)
-        q[HelloStretchIdx.WRIST_YAW] = rng.uniform(-1.0, 1.0)
-        q[HelloStretchIdx.HEAD_PAN] = 0.0
-        q[HelloStretchIdx.HEAD_TILT] = 0.0
-
+        q = sample_joint_positions(model)
         pos, quat = model.manip_fk(q)
         pairs.append(
             {
