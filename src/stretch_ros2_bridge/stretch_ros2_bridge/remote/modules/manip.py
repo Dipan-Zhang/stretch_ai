@@ -61,6 +61,11 @@ class StretchManipulationClient(AbstractControlModule):
         # We do not need to call the service to disable the mode
         return True
 
+    def reset_init_base_pose(self):
+        # enforce reset init pose for manipulation
+        self._init_base_pose = None
+        self._init_base_pose = self._ros_client.se3_base_filtered
+
     def get_base_x(self):
         """Get the current base x position"""
         if self._init_base_pose is None:

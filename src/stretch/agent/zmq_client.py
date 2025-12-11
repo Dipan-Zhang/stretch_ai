@@ -936,6 +936,16 @@ class HomeRobotZmqClient(AbstractRobotClient):
         if verbose:
             logger.info("Waiting for manipulation mode")
         self._wait_for_mode("manipulation", verbose=verbose)
+    
+
+    def reset_manipulation_base_pose(self, verbose: bool = False):
+        "reset the manipulation base pose"
+        next_action = {"control_mode": "manip_reset_base_pose", "step": self._iter}
+        action = self.send_action(next_action)
+        if verbose:
+            logger.info("Resetting manipulation base pose")
+        self._wait_for_mode("manipulation", verbose=verbose)
+
 
     def move_to_nav_posture(self) -> None:
         """Move the robot to the navigation posture. This is where the head is looking forward and the arm is tucked in."""

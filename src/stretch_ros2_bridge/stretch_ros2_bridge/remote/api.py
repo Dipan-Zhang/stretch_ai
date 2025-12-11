@@ -148,6 +148,11 @@ class StretchClient(AbstractRobotClient):
 
     # General control methods
 
+    def reset_manipulation_base(self):
+        """reset the manipulation coordinate frame, same as disable and then enable manipulation mode"""
+        self.manip.reset_init_base_pose()
+        print("!!manipulation initial pose got reset!!")
+    
     def wait(self):
         self.nav.wait()
         self.manip.wait()
