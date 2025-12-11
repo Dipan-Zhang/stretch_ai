@@ -606,6 +606,7 @@ class ZmqRos2Leader:
                                 head_rgb=head_color_image,
                                 head_depth=head_depth_image,
                                 head_cam_pose=observation.camera_pose,
+                                base_pose_xyr=np.array([observation.gps[0], observation.gps[1], observation.compass[0]]),
                             )
 
                             # Record waypoint
