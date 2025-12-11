@@ -145,6 +145,9 @@ class ZmqServer(BaseZmqServer):
             elif action["control_mode"] == "navigation":
                 self.client.switch_to_navigation_mode()
                 self.control_mode = "navigation"
+            elif action["control_mode"] == "manip_reset_base_pose":
+                self.client.reset_manipulation_base_pose()
+                self.control_mode = "manipulation"
             else:
                 print(
                     " - control mode",
@@ -289,6 +292,7 @@ class ZmqServer(BaseZmqServer):
         }
         return d405_output
 
+    @override
     def get_servo_message(self) -> Dict[str, Any]:
         if self.use_d405:
             d405_output = self._get_ee_cam_message()
@@ -329,8 +333,9 @@ class ZmqServer(BaseZmqServer):
 @click.option("--send_port", default=4401, help="Port to send observations to")
 @click.option("--recv_port", default=4402, help="Port to receive actions from")
 @click.option("--local", is_flag=True, help="Run code locally on the robot.")
-@click.option("--image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
-@click.option("--ee_image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--ee_image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
+
 def main(
     send_port: int = 4401,
     recv_port: int = 4402,
