@@ -29,6 +29,7 @@ from stretch.utils.data_tools.record import FileDataRecorder
 import stretch.app.lfd.visualize_utils as vis_utils
 import liblzfse
 import open3d as o3d 
+PROGRESS_TH=0.95
 
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
@@ -88,6 +89,8 @@ class ROS2LfdLeader:
         self._run_policy = run_policy
         self.visualize_trajectory = not self._run_policy
         self.visualization_data_path = visualization_data_path
+        # Track current pose for relative motion mode
+        self.current_pose = None
 
         if self.visualize_trajectory:
             assert self.visualization_data_path is not None, 'visualization_data_path must be provided when visualize_trajectory is enabled'
@@ -110,6 +113,8 @@ class ROS2LfdLeader:
                 vis_utils.visualize_trajectory(self.policy, self.relative_motion, self.visualization_data_path, idx)
             breakpoint()
 
+        self.robot.reset_manipulation_base_pose()
+        print('reset robot manip base pose!')
         try:
             while True:
                 loop_timer.mark_start()
@@ -123,13 +128,14 @@ class ROS2LfdLeader:
                 }
 
                 # Process images
-                gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR)
+                gripper_color_image = observation.ee_rgb # RGB 
                 gripper_depth_image = (
                     observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
                 )
-                head_color_image = cv2.cvtColor(observation.rgb, cv2.COLOR_RGB2BGR)
+                head_color_image = observation.rgb
                 head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
                 print('gripper_color_image shape', gripper_depth_image.shape)
+                gripper_color_image_resized = cv2.resize(gripper_color_image, (320, 240))
                 # Clip and normalize depth
                 gripper_depth_image = dobbe_format_rel.clip_and_normalize_depth(
                     gripper_depth_image, self.depth_filter_k
@@ -137,7 +143,6 @@ class ROS2LfdLeader:
                 head_depth_image = dobbe_format_rel.clip_and_normalize_depth(
                     head_depth_image, self.depth_filter_k
                 )
-
 
 
                 action = None
@@ -148,24 +153,47 @@ class ROS2LfdLeader:
                     else:
                         current_state = prepare_state_abs(observation, joint_states, self.device)
 
+                    print('current pose', current_state[:3])
+
                     current_img = prepare_image(
-                        gripper_color_image, self.device
+                        gripper_color_image_resized, self.device
                     )# [:, [2,1,0]] # in RGB format
 
-                    # ### DEBUG VISUALIZE THE IMAGE
-                    _img_uint8 = (current_img[0] * 255).cpu().numpy().astype(np.uint8)
-                    _img_uint8 = np.transpose(_img_uint8, (1,2,0))
+                    # DEBUG preprocess head image:
+                    from PIL import Image
+                    head_image_PIL = Image.fromarray(head_color_image)
+                    original_height, original_width = head_color_image.shape[:2] # head: (1280, 720)
+                    goal_width, goal_height = 320, 240
+                    goal_ratio = goal_width / goal_height  # 320/240 = 4/3 = 1.333
+                    
+                    # Keep full height, crop width from center to match 4:3 ratio
+                    crop_height = original_height
+                    crop_width = int(crop_height * goal_ratio)  # 720 * 1.333 = 960
+                    left = (original_width - crop_width) // 2
+                    top = 0
+                    
+                    head_image_cropped = head_image_PIL.crop((left, top, left + crop_width, top + crop_height))
+                    head_image_resized = head_image_cropped.resize((goal_width, goal_height), Image.Resampling.LANCZOS)
+                    head_image_resized = np.array(head_image_resized)
+                    current_head_image = prepare_image(
+                        head_image_resized, self.device
+                    )
+                    print(f'head_image_resized shape {head_image_resized.shape}')
+                    
 
-                    # cv2.imshow("observation images", _img_uint8)
-                    # cv2.waitKey(1)
+                    # ### DEBUG VISUALIZE THE IMAGE
+                    combined_img = np.concatenate((gripper_color_image_resized, head_image_resized), axis=0)
+
+                    cv2.imshow("observation images", combined_img)
+                    cv2.waitKey(1)
 
                     observations = {
                         "observation.state": current_state,
                         "observation.images.gripper": current_img,
-                        "observation.images.head": prepare_image(head_color_image, self.device),
+                        "observation.images.head": current_head_image,
                     }
 
-                    # Send observation to policy
+                    # Send observation to polic
                     with torch.inference_mode():
                         raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
 
@@ -177,28 +205,22 @@ class ROS2LfdLeader:
                         # we need the current absolute pose, then apply all actions in the chunk sequentially
                         if (_t_debug) % 8 == 0:
                             # Get current absolute pose from robot (this is the pose BEFORE applying the first action of the chunk)
-                            current_pose = observation.ee_pose.copy()
+                            self.current_pose = observation.ee_pose.copy()
                             print(f'idx {_t_debug}: current pose refreshed for new chunk!')
-                            print(f'  Current pose position: {current_pose=}')
-                        
-                        # Ensure current_pose is initialized (shouldn't happen, but safety check)
-                        if 'current_pose' not in locals():
-                            current_pose = observation.ee_pose.copy()
-                            print(f'WARNING: current_pose not initialized, using observation.ee_pose')
+                            print(f'  Current pose position: {self.current_pose[:3, 3]}')
                         
                         # Build relative transformation matrix from action
-                        # Action format: [x, y, z, qx, qy, qz, qw, gripper] (scipy uses [x, y, z, w])
                         T_rel = np.eye(4)
                         T_rel[:3, 3] = np.array(action[:3])  # Translation
                         quat_action = np.array(action[3:7])  # [qx, qy, qz, qw]
                         T_rel[:3, :3] = tra.Rotation.from_quat(quat_action).as_matrix()
                         
                         # Apply relative transformation: new_abs = current_abs @ T_rel
-                        # This follows the same pattern as test: current_pose @ action
-                        current_pose = current_pose @ T_rel
+                        # This matches the visualization code: current_pose = current_pose @ T_rel
+                        self.current_pose = self.current_pose @ T_rel
                         # Extract position and quaternion from resulting absolute pose
-                        pos = current_pose[:3, 3]
-                        quat = tra.Rotation.from_matrix(current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
+                        pos = self.current_pose[:3, 3]
+                        quat = tra.Rotation.from_matrix(self.current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
                         gripper = action[7]
                     else:
                         pos = action[:3]
@@ -216,11 +238,14 @@ class ROS2LfdLeader:
                         pos = pos,
                         quat = quat, 
                         gripper=gripper,  # gripper
-                        world_frame=True,
+                        world_frame=False,
                         reliable=True,
                         blocking=True,
                     )
-                    
+                    # breakpoint()
+                    if action[8] >= PROGRESS_TH:
+                        print('task succeed!')
+                        break
                 else:
                     # If we aren't running the policy, what do we even need to do?
                     continue  # Skip the rest of the loop
@@ -238,13 +263,13 @@ class ROS2LfdLeader:
                 if len(action) == 9:
                     stop = action[8] > PROGRESS_STOP_THRESHOLD
 
-                if self._force and stop:
-                    print(f"[LEADER] Stopping policy execution")
-                    self._need_to_write = True
+                # if self._force and stop:
+                #     print(f"[LEADER] Stopping policy execution")
+                #     self._need_to_write = True
 
-                    if self._disable_recording:
-                        self._need_to_write = False
-                        break
+                #     if self._disable_recording:
+                #         self._need_to_write = False
+                #         break
 
                 
 
