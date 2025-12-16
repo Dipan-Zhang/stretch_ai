@@ -100,10 +100,11 @@ class FileDataRecorder:
         ee_pose: np.ndarray,
         observations: Dict[str, float],
         actions: Dict[str, float],
+        ee_cam_K: np.ndarray = None,
         head_rgb: Optional[np.ndarray] = None,
         head_depth: Optional[np.ndarray] = None,
         head_cam_pose: Optional[np.ndarray] = None,
-        base_pose_xyr: Optional[np.ndarray] = None,
+        head_cam_K: Optional[np.ndarray] = None,
     ):
         """Add data to the recorder."""
         self.rgbs.append(ee_rgb)
@@ -119,11 +120,14 @@ class FileDataRecorder:
             "quats": quaternion.tolist(),
             "gripper": gripper,
             "ee_pose": ee_pose.tolist(),
-            "base_pose_xyr": base_pose_xyr.tolist(),
             "observations": observations,
             "actions": actions,
             "waypoints": {},
         }
+        if ee_cam_K is not None:
+            self.data_dicts[self.step]["ee_cam_K"] = ee_cam_K.tolist()
+        if head_cam_K is not None:
+            self.data_dicts[self.step]["head_cam_K"] = head_cam_K.tolist()
         self.step += 1
 
     def write(self, success: Optional[bool] = None):

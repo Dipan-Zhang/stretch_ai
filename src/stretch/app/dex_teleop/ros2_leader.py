@@ -596,6 +596,7 @@ class ZmqRos2Leader:
                                 ee_rgb=gripper_color_image,
                                 ee_depth=gripper_depth_image,
                                 ee_cam_pose=observation.ee_camera_pose,
+                                ee_cam_K=observation.ee_camera_K,
                                 xyz=goal_dict["relative_gripper_position"],
                                 quaternion=goal_dict["relative_gripper_orientation"],
                                 ee_goal_pose=goal_dict['absolute_gripper_pose'],
@@ -606,7 +607,7 @@ class ZmqRos2Leader:
                                 head_rgb=head_color_image,
                                 head_depth=head_depth_image,
                                 head_cam_pose=observation.camera_pose,
-                                base_pose_xyr=np.array([observation.gps[0], observation.gps[1], observation.compass[0]]),
+                                head_cam_K=observation.camera_K,
                             )
 
                             # Record waypoint
@@ -636,10 +637,12 @@ class ZmqRos2Leader:
                     if self.record_success:
                         success = self.ask_for_success()
                         print("[LEADER] Writing data to disk with success = ", success)
+                        self.robot.reset_manipulation_base_pose()
                         self._recorder.write(success=success)
                     else:
                         print("[LEADER] Writing data to disk.")
                         self._recorder.write()
+                        self.robot.reset_manipulation_base_pose()
                     self._need_to_write = False
 
         finally:
