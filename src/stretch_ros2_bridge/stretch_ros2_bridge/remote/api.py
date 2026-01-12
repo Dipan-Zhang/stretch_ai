@@ -22,7 +22,7 @@ import trimesh.transformations as tra
 from stretch.core.interfaces import Observations
 from stretch.core.robot import AbstractRobotClient, ControlMode
 from stretch.motion import RobotModel
-from stretch.motion.constants import STRETCH_CAMERA_FRAME, STRETCH_NAVIGATION_Q, STRETCH_PREGRASP_Q
+from stretch.motion.constants import STRETCH_CAMERA_FRAME, STRETCH_NAVIGATION_Q, STRETCH_PREGRASP_Q, STRETCH_OBS_PREGRASP_Q
 from stretch.motion.kinematics import HelloStretchIdx, HelloStretchKinematics
 from stretch.utils.geometry import xyt2sophus
 
@@ -269,9 +269,9 @@ class StretchClient(AbstractRobotClient):
         return self._ros_client.get_frame_pose(frame, base_frame, lookup_time)
 
     def move_to_manip_posture(self):
-        """Move the arm and head into manip mode posture: gripper down, head facing the gripper."""
+        """Move the arm and head into manip mode posture: gripper facing front, head facing the gripper."""
         self.switch_to_manipulation_mode()
-        pos = self.manip._extract_joint_pos(STRETCH_PREGRASP_Q)
+        pos = self.manip._extract_joint_pos(STRETCH_OBS_PREGRASP_Q)
         pan, tilt = self._robot_model.look_at_ee
         print("- go to configuration:", pos, "pan =", pan, "tilt =", tilt)
         self.manip.goto_joint_positions(pos, head_pan=pan, head_tilt=tilt, blocking=True)
