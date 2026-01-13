@@ -21,8 +21,11 @@ import liblzfse
 #         wxyz=wxyz,
 #         position=position,
 #     )
+
+# for vidbot
 HEAD_CAM_K= np.array([[911.0936279296875, 0.0, 377.4052734375], [0.0, 910.6778564453125, 626.5808715820312], [0.0, 0.0, 1.0]])
 EE_CAM_K = np.array([[431.0948181152344, 0.0, 313.27081298828125], [0.0, 430.81134033203125, 245.1189422607422], [0.0, 0.0, 1.0]])
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
