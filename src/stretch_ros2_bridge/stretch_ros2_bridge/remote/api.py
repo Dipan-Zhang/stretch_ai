@@ -196,7 +196,7 @@ class StretchClient(AbstractRobotClient):
             p0 = self._ros_client.get_frame_pose(
                 self.head_camera_frame, base_frame=None, timeout_s=5.0
             ) # relative to baselink
-            p0[0] += self.manip.get_base_x()
+            p0[0][3] += self.manip.get_base_x()
         else:
             p0 = self._ros_client.get_frame_pose(
                 self.head_camera_frame, base_frame=self.world_frame, timeout_s=5.0
@@ -214,7 +214,7 @@ class StretchClient(AbstractRobotClient):
             p0 = self._ros_client.get_frame_pose(
                 self.ee_camera_frame, base_frame=None, timeout_s=5.0
             )
-            p0[0] += self.manip.get_base_x()
+            p0[0][3] += self.manip.get_base_x()
         else:
             p0 = self._ros_client.get_frame_pose(
                 self.ee_camera_frame, base_frame=self.world_frame, timeout_s=5.0
@@ -228,7 +228,7 @@ class StretchClient(AbstractRobotClient):
     def ee_pose(self):
         if self._base_control_mode == ControlMode.MANIPULATION:
             p0 = self._ros_client.get_frame_pose(self.ee_frame, base_frame=None, timeout_s=5.0)
-            p0[0] += self.manip.get_base_x()
+            p0[0][3] += self.manip.get_base_x()
         else:
             p0 = self._ros_client.get_frame_pose(self.ee_frame, base_frame=self.world_frame)
         if p0 is not None:
