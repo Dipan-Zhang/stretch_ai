@@ -142,6 +142,11 @@ class StretchRosInterface(Node):
         self._is_runstopped = None
 
         self._pose_graph = []
+        
+        # Track last commanded head position to avoid sending current joint state
+        # when head joints are not explicitly commanded
+        self._last_commanded_head_pan: Optional[float] = None
+        self._last_commanded_head_tilt: Optional[float] = None
 
         # Start the thread
         self._thread = threading.Thread(target=rclpy.spin, args=(self,), daemon=True)
@@ -252,9 +257,15 @@ class StretchRosInterface(Node):
     ):
         """Send joint goals to the robot. Goals are a dictionary of joint names and strings. Can optionally provide velicities as well."""
 
+        # read current joint state
         with self._js_lock:
             joint_pose = self._process_joint_status(self.joint_status)
 
+        if True:
+            self.get_logger().info(f'sending joint_goals is {joint_goals}')
+            self.get_logger().info(f'after processing joint_pose is {joint_pose}')
+            if self.HEAD_PAN in joint_goals or self.HEAD_TILT in joint_goals:
+                self.get_logger().info(f'!!!!!sending head pan and tilt joint goals is {joint_goals[self.HEAD_PAN]} {joint_goals[self.HEAD_TILT]}!!!!')
         # Use Idx to convert
         if self.LIFT_JOINT in joint_goals:
             joint_pose[self.Idx.LIFT] = joint_goals[self.LIFT_JOINT]
@@ -273,8 +284,28 @@ class StretchRosInterface(Node):
             joint_pose[self.Idx.GRIPPER] = joint_goals[self.GRIPPER_FINGER]
         if self.HEAD_PAN in joint_goals:
             joint_pose[self.Idx.HEAD_PAN] = joint_goals[self.HEAD_PAN]
+            self._last_commanded_head_pan = joint_goals[self.HEAD_PAN]
+        elif self._last_commanded_head_pan is not None:
+            # Use last commanded value instead of current joint state to avoid tracking movement
+            joint_pose[self.Idx.HEAD_PAN] = self._last_commanded_head_pan
+        else:
+            # Initialize from current joint state on first use only
+            with self._js_lock:
+                if ROS_HEAD_PAN in self.joint_status:
+                    self._last_commanded_head_pan = self.joint_status[ROS_HEAD_PAN]
+                    joint_pose[self.Idx.HEAD_PAN] = self._last_commanded_head_pan
+        
         if self.HEAD_TILT in joint_goals:
             joint_pose[self.Idx.HEAD_TILT] = joint_goals[self.HEAD_TILT]
+        elif self._last_commanded_head_tilt is not None:
+            joint_pose[self.Idx.HEAD_TILT] = self._last_commanded_head_tilt
+        else:
+            with self._js_lock:
+                if ROS_HEAD_TILT in self.joint_status:
+                    self._last_commanded_head_tilt = self.joint_status[ROS_HEAD_TILT]
+                    joint_pose[self.Idx.HEAD_TILT] = self._last_commanded_head_tilt
+        print(f' last commands head and tilt are {self._last_commanded_head_pan} {self._last_commanded_head_tilt}')
+
         if self.BASE_TRANSLATION_JOINT in joint_goals:
             joint_pose[self.Idx.BASE_TRANSLATE] = joint_goals[self.BASE_TRANSLATION_JOINT]
 
