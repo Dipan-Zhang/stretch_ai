@@ -714,9 +714,10 @@ class HomeRobotZmqClient(AbstractRobotClient):
         pos: Union[List[float], np.ndarray],
         quat: Optional[Union[List[float], np.ndarray]] = None,
         gripper: float = None,
+        relative: bool = False,
         world_frame: bool = False, 
         blocking: bool = True,
-        timeout: float = 10.0,
+        timeout: float = 5.0,
         verbose: bool = False,
         reliable: bool = True,
     ) -> bool:
@@ -743,14 +744,11 @@ class HomeRobotZmqClient(AbstractRobotClient):
         if isinstance(pos, list):
             pos = np.array(pos)
         
-        if pos is None:
-            assert (
-                config is not None and len(config.keys()) > 0
-            ), "Must provide desired position values as params"
-            joint_positions = self.get_joint_positions()
-            joint_angles = conversions.config_to_manip_command(joint_positions)
-            return False
-        
+        print(f"SERVER COMMAND: pos {pos} quat {quat} gripper {gripper} relative {relative} blocking {blocking} reliable {reliable}")
+        if relative == True:
+            print("relative mode not fully tested yet")
+            raise NotImplementedError 
+
         # create and send the action
         if quat is not None:
             _next_action = {"ee_pose": {"pos": pos, "quat": quat}}
@@ -759,6 +757,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         if gripper is not None:
             _next_action["gripper"] = gripper
         _next_action["world_frame"] = world_frame
+        _next_action["relative"] = relative
         _next_action["manip_blocking"] = blocking
         self.send_action(_next_action, reliable=reliable)
         # print(f'next action is {_next_action=}')
