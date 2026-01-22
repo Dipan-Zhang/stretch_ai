@@ -36,7 +36,7 @@ echo "Docker image version: $VERSION"
 # sudo chown -R $USER:$USER /home/$USER/stretch_user
 # sudo chown -R $USER:$USER /home/$USER/ament_ws/install/stretch_description/share/stretch_description/urdf
 
-echo "Running docker image hellorobotinc/stretch-ai-ros2-dev:$VERSION"
+echo "Running docker image anranzzz/stretch-ai_ros2-dev:$VERSION"
 # Make sure the image is up to date
 
 docker run -it --rm \
@@ -53,11 +53,10 @@ docker run -it --rm \
     -v /dev/shm:/dev/shm \
     -v /home/$USER/stretch_user:/home/hello-robot/stretch_user_copy \
     -v /home/$USER/ament_ws/:/home/hello-robot/ament_ws/ \
-    -v /home/$USER/stretch_ai/:/home/hello-robot/stretch_ai/ \
+    -v /home/$USER/stretch_ai_anran/:/home/hello-robot/stretch_ai_anran/ \
     anranzzz/stretch-ai_ros2-dev:$VERSION \
     bash -c "source /home/hello-robot/.bashrc; \
             cd /home/hello-robot/ament_ws/src;  \
-            ln -s /home/hello-robot/stretch_ai/src/stretch_ros2_bridge ~/ament_ws/src/stretch_ros2_bridge; \
             cd /home/hello-robot/ament_ws; \
             colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install --event-handlers console_direct+; \
             cp -rf /home/hello-robot/stretch_user_copy/* /home/hello-robot/stretch_user; \
