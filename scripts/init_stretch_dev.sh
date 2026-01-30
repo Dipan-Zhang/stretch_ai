@@ -47,7 +47,6 @@ docker run -it --rm \
     -e DISPLAY=$DISPLAY \
     -e HELLO_FLEET_ID=$HELLO_FLEET_ID \
     -e XAUTHORITY=/tmp/.docker.xauth \
-    -v $XAUTHORITY:/tmp/.docker.xauth:rw \
     -v /dev:/dev \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v /run/dbus/:/run/dbus/:rw \

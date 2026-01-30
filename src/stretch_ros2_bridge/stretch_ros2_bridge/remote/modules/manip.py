@@ -24,6 +24,7 @@ from stretch.motion.robot import RobotModel
 from stretch.utils.geometry import pose_global_to_base_xyt, posquat2sophus, sophus2posquat
 
 from .abstract import AbstractControlModule, enforce_enabled
+import time
 
 # from std_srvs.srv import TriggerRequest
 
@@ -216,24 +217,33 @@ class StretchManipulationClient(AbstractControlModule):
             # self._ros_client.wait_for_trajectory_action()
 
             # Check final joint states
-            joint_pos_final = self.get_joint_positions()
-            joint_err = np.array(joint_pos_final) - np.array(joint_pos_goal)
-            arm_success = np.allclose(joint_err[:3], 0.0, atol=JOINT_POS_TOL)
-            wrist_success = np.allclose(joint_err[3:], 0.0, atol=JOINT_ANG_TOL)
-            if not (arm_success and wrist_success):
-                print("Warning: Joint goal not achieved.")
+            all_success = False
+            timeout=200
+            t=0
+            while not all_success and t<timeout:
+                t += 1
+                joint_pos_final = self.get_joint_positions()
+                joint_err = np.array(joint_pos_final) - np.array(joint_pos_goal)
+                arm_success = np.allclose(joint_err[:3], 0.0, atol=JOINT_POS_TOL)
+                wrist_success = np.allclose(joint_err[3:], 0.0, atol=JOINT_ANG_TOL)
+                all_success = arm_success and wrist_success
+                if not (all_success):
+                    print("Warning: Joint goal not achieved.")
+                else:
+                    print('desired Joint goal reached!')
 
-            # Debug print
-            if debug:
-                print("-- joint goto cmd --")
-                print("Initial joint pos: [", *(f"{x:.3f}" for x in joint_pos_init), "]")
-                print("Desired joint pos: [", *(f"{x:.3f}" for x in joint_pos_goal), "]")
-                print(
-                    "Achieved joint pos: [",
-                    *(f"{x:.3f}" for x in joint_pos_final),
-                    "]",
-                )
-                print("--------------------")
+                # Debug print
+                if debug:
+                    print("-- joint goto cmd --")
+                    print("Initial joint pos: [", *(f"{x:.3f}" for x in joint_pos_init), "]")
+                    print("Desired joint pos: [", *(f"{x:.3f}" for x in joint_pos_goal), "]")
+                    print(
+                        "Achieved joint pos: [",
+                        *(f"{x:.3f}" for x in joint_pos_final),
+                        "]",
+                    )
+                    print("--------------------")
+                time.sleep(0.01)
 
         self._register_wait(joint_move_wait)
 
@@ -294,7 +304,6 @@ class StretchManipulationClient(AbstractControlModule):
         if debug:
             print("=== EE goto command ===")
             print(f"Initial EE pose: pos={pos_ee_curr}; quat={quat_ee_curr}")
-            print(f"Input EE pose: pos={np.array(pos)}; quat={np.array(quat)}")
             print(f"Desired EE pose: pos={pos_ik_goal}; quat={quat_ik_goal}")
 
         # Perform IK

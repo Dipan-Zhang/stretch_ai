@@ -28,7 +28,8 @@ from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_sta
 from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel
 
 PROGRESS_TH=0.95
-
+GRIPPER_MIN=-0.3
+GRIPPER_MAX=0.6
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
 
@@ -52,6 +53,7 @@ class ROS2LfdLeader:
         relative_motion: bool = False,
         run_policy: bool = True,
         visualization_data_path: str = None,
+        visualize_action: bool = False
     ):
         self.robot = robot
 
@@ -89,6 +91,7 @@ class ROS2LfdLeader:
         self.visualization_data_path = visualization_data_path
         # Track current pose for relative motion mode
         self.current_pose = None
+        self.visualize_action = visualize_action
 
         if self.visualize_trajectory:
             assert self.visualization_data_path is not None, 'visualization_data_path must be provided when visualize_trajectory is enabled'
@@ -177,13 +180,7 @@ class ROS2LfdLeader:
                         head_image_resized, self.device
                     )
                     print(f'head_image_resized shape {head_image_resized.shape}')
-                    
-
-                    # ### DEBUG VISUALIZE THE IMAGE
-                    combined_img = np.concatenate((gripper_color_image_resized, head_image_resized), axis=0)
-
-                    cv2.imshow("observation images", combined_img)
-                    cv2.waitKey(1)
+    
 
                     observations = {
                         "observation.state": current_state,
@@ -193,7 +190,7 @@ class ROS2LfdLeader:
 
                     # Send observation to polic
                     with torch.inference_mode():
-                        raw_action = self.policy.select_action(observations) # relative cartesian pose xyz, quaternion wxyz
+                        raw_action, full_actions = self.policy.select_action(observations, return_full_actions=True) # relative cartesian pose xyz, quaternion wxyz
 
                     action = raw_action[0].tolist() # [n_action, n_dim]
                     if self.relative_motion:
@@ -225,10 +222,31 @@ class ROS2LfdLeader:
                         quat = action[3:7]
                         gripper = action[7] 
 
+                    if self.visualize_action:
+                        # project the action to the head image
+                        # action should be an (N, 8) array (N = 1)
+                        T_base_head_cam = observation.camera_pose  # (4,4)
+                        head_cam_K = observation.camera_K  # (3,3)
+                        head_image_for_vis = np.array(head_image_PIL)
+
+                        actions = full_actions[:,0,:].cpu().numpy() # T,1,D -> T,D
+                        # print(actions.shape)
+
+                        projected_img = vis_utils.project_action_predictions(
+                            actions, 
+                            T_base_head_cam.astype(np.float32),
+                            head_cam_K.astype(np.float32),
+                            head_image_for_vis
+                        )
+
+                        # Ensure image in imshow is uint8 BGR. projected_img is RGB.
+                        img_bgr = cv2.cvtColor(projected_img, cv2.COLOR_RGB2BGR)
+                        cv2.imshow("projected actions", img_bgr)
+                        cv2.waitKey(1)
+
                     # TEMP, remove this after adapting the dataset preparation
                     # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
-                    GRIPPER_MIN=-0.3
-                    GRIPPER_MAX=0.6
+
                     gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
         
                     print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]} idx{_t_debug}')
@@ -336,6 +354,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
     parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
+    parser.add_argument("--visualize_action", action="store_true", help="Use relative motion.")
     parser.add_argument(
         "--visualization_data_path",
         type=str,
@@ -377,7 +396,8 @@ if __name__ == "__main__":
         device=args.device,
         relative_motion=args.relative_motion,
         visualization_data_path=args.visualization_data_path,
-        run_policy=not args.run_visualization
+        run_policy=not args.run_visualization,
+        visualize_action=args.visualize_action
     )
 
     try:
