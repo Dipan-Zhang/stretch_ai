@@ -13,6 +13,7 @@ import os
 
 import cv2
 import numpy as np
+from sympy.logic.boolalg import true
 import torch
 import scipy.spatial.transform as tra
 import liblzfse
@@ -38,9 +39,9 @@ import utils.dataset_utils as DatasetUtils # type: ignore
 from utils.viewer_utils import SceneViewer # type: ignore
 import utils.aria_utils as AriaUtils # type: ignore
 from policies.robot_policy_wrapper import PolicyVLAWorldModelWrapperStretchRobot # type: ignore 
-
+import time 
 from termcolor import colored
-
+from scipy.spatial.transform import Rotation as R
 PROGRESS_TH=0.95
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
@@ -171,6 +172,103 @@ def prepare_state_abs(observation: dict, joint_states) -> np.ndarray:
     state[:16] = ee_pose.reshape(-1)
     state[16] = joint_states['gripper']
     return state
+
+# def dict_value_torch2numpy(data_batch: dict) -> torch.Tensor:
+#     """
+#     convert all the values in the dictionary to numpy arrays
+#     Args:
+#         data_batch: dict, the data batch
+#     Returns:
+#         numpy array, the data batch
+#     """
+#     data_batch_np = {}
+#     for key, value in data_batch.items():
+#         if isinstance(value, torch.Tensor):
+#             if value.device != torch.device("cpu"):
+#                 value = value.cpu()
+#             data_batch_np[key] = value.numpy()
+#     return data_batch_np
+
+def go_to_target_pose(
+    robot: HomeRobotZmqClient, 
+    target_pos: np.ndarray, 
+    target_quat: np.ndarray, 
+    target_gripper:float, 
+    max_iter: int = 10, 
+    pos_err_threshold: float = 0.01, 
+    rot_err_threshold: float = 2,
+    world_frame: bool = False,
+    non_blocking: bool = False,
+):
+    """
+    Go to the target pose using the robot's arm and gripper.
+    
+    Args:
+        robot: The robot client
+        target_pos: Target position (3D array)
+        target_quat: Target quaternion (xyzw format)
+        target_gripper: Target gripper value
+        max_iter: Maximum number of iterations (only used when non_blocking=True)
+        pos_err_threshold: Position error threshold in meters
+        rot_err_threshold: Rotation error threshold in degrees
+        world_frame: Whether to use world frame
+        non_blocking: If False, send command once and return True immediately.
+                      If True, loop and check if target is reached.
+        
+    Returns:
+        True if target reached (or command sent when non_blocking=False), False otherwise
+    """
+    # If non_blocking=False, just send the command and return
+    if not non_blocking:
+        robot.arm_to_ee_pose(
+            pos = target_pos,
+            quat = target_quat,
+            gripper = target_gripper,
+            world_frame = world_frame,
+            reliable = True,
+            blocking = True,
+        )
+        return True
+    
+    # Otherwise, loop and check if target is reached
+    target_rot = R.from_quat(target_quat)
+    
+    for it in range(max_iter):
+        # Get current observation
+        observation = robot.get_servo_observation()
+        ee_pose = observation.ee_pose
+        current_pos = ee_pose[:3, 3]
+        current_rot = R.from_matrix(ee_pose[:3, :3])
+        
+        # Calculate position error
+        pos_err = np.linalg.norm(current_pos - target_pos)
+        
+        # Calculate rotation error using quaternion distance (more robust than RPY)
+        # This gives the angle between rotations in degrees
+        rot_diff = target_rot.inv() * current_rot
+        rot_err = np.abs(rot_diff.as_rotvec())
+        rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
+        
+        # Check if target is reached
+        reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
+        if reached:
+            print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
+            return True
+        
+        # Move towards target
+        robot.arm_to_ee_pose(
+            pos = target_pos,
+            quat = target_quat,
+            gripper = target_gripper,
+            world_frame = world_frame,
+            reliable = True,
+            blocking = True,
+        )
+    
+    # Failed to reach target within max_iter
+    print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
+    return False
+
 
 class ROS2LfdLeaderEgoasis:
     def __init__(
@@ -320,7 +418,7 @@ class ROS2LfdLeaderEgoasis:
                 action = None
                 with torch.inference_mode():
                     outputs = self.policy.inference(obs, action_only=True) # relative cartesian pose xyz, quaternion wxyz
-                    action = outputs['selected_action'].cpu().numpy()
+                    action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                     latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
 
                 pos = action[:3]
@@ -331,22 +429,30 @@ class ROS2LfdLeaderEgoasis:
                 if self.verbose:
                     T_base_head_cam = observation.camera_pose  # (4,4)
                     T_base_ee_cam = observation.ee_camera_pose
-
+                    current_state_vis = current_state.copy()[:16].reshape(4, 4)
+                    tra_curr_state_vis = current_state_vis[:3, 3]
+                    quat_curr_state_vis = R.from_matrix(current_state_vis[:3, :3]).as_quat()
+                    curr_state_vis = np.zeros(9)
+                    curr_state_vis[:3] = tra_curr_state_vis
+                    curr_state_vis[3:7] = quat_curr_state_vis
+                    curr_state_vis[7] = current_state[16]
+                    curr_state_vis = curr_state_vis.astype(np.float32)
                     head_image_for_vis = head_color_resized.copy()
                     gripper_cam_for_vis = gripper_color_resized.copy()
 
                     # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
                     assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
                     projected_img = vis_utils.project_action_predictions(
-                        latest_action_chunk, 
+                        # curr_state_vis[None], 
+                        latest_action_chunk,
                         # action[None],
                         T_base_head_cam.astype(np.float32),
                         head_cam_K_resized.astype(np.float32),
                         head_image_for_vis
                     ) # [320, 320]
-
                     projected_img_gripper = vis_utils.project_action_predictions(
-                        latest_action_chunk, 
+                        # curr_state_vis[None], 
+                        latest_action_chunk,
                         # action[None],
                         T_base_ee_cam.astype(np.float32),
                         gripper_cam_K_resized.astype(np.float32),
@@ -364,18 +470,41 @@ class ROS2LfdLeaderEgoasis:
                 # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
                 gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
                 # print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[-1]} idx{_t_debug}')
-                self.robot.arm_to_ee_pose(
-                    pos = pos,
-                    quat = quat, 
-                    gripper=gripper,  # gripper
-                    world_frame=False,
-                    reliable=True,
-                    blocking=True,
-                )
+                
+                # self.robot.arm_to_ee_pose(
+                #     pos = pos,
+                #     quat = quat, 
+                #     gripper=gripper,  # gripper
+                #     world_frame=False,
+                #     reliable=True,
+                #     blocking=True,
+                # )
+                go_to_target_pose(
+                    self.robot, 
+                    pos, 
+                    quat, 
+                    gripper, 
+                    max_iter=10, 
+                    pos_err_threshold=0.01, 
+                    rot_err_threshold=2, 
+                    non_blocking=True,
+                    world_frame=False)
+
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
                     break
                 _t_debug += 1
+                
+                # # convert the inputs, output to numpy dict
+                # data_batch_np = dict_value_torch2numpy(data_batch)
+                # outputs_np = dict_value_torch2numpy(outputs)
+                # self._recorder.add(
+                #     ee_rgb=gripper_color_image,
+                #     ee_depth=gripper_depth_image,
+                #     ee_cam_pose=gripper_cam_pose,
+                #     xyz=pos,
+                #     quaternion=quat,
+                # )
 
                 if self.verbose:
                     loop_timer.mark_end()
@@ -383,9 +512,8 @@ class ROS2LfdLeaderEgoasis:
 
                 # Stop condition for forced execution
                 stop = False
-                PROGRESS_STOP_THRESHOLD = 0.8
                 if len(action) == 9:
-                    stop = action[8] > PROGRESS_STOP_THRESHOLD
+                    stop = action[-1] > PROGRESS_TH
  
 
         finally:
