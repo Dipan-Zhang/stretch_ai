@@ -27,9 +27,95 @@ import stretch.app.lfd.visualize_utils as vis_utils
 from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs
 from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel
 
+from PIL import Image
+from scipy.spatial.transform import Rotation as R
+
 PROGRESS_TH=0.95
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
+
+def go_to_target_pose(
+    robot: HomeRobotZmqClient, 
+    target_pos: np.ndarray, 
+    target_quat: np.ndarray, 
+    target_gripper:float, 
+    max_iter: int = 10, 
+    pos_err_threshold: float = 0.01, 
+    rot_err_threshold: float = 2,
+    world_frame: bool = False,
+    non_blocking: bool = False,
+):
+    """
+    Go to the target pose using the robot's arm and gripper.
+    
+    Args:
+        robot: The robot client
+        target_pos: Target position (3D array)
+        target_quat: Target quaternion (xyzw format)
+        target_gripper: Target gripper value
+        max_iter: Maximum number of iterations (only used when non_blocking=True)
+        pos_err_threshold: Position error threshold in meters
+        rot_err_threshold: Rotation error threshold in degrees
+        world_frame: Whether to use world frame
+        non_blocking: If False, send command once and return True immediately.
+                      If True, loop and check if target is reached.
+        
+    Returns:
+        True if target reached (or command sent when non_blocking=False), False otherwise
+    """
+    # # If non_blocking=False, just send the command and return
+    # if not non_blocking:
+    #     robot.arm_to_ee_pose(
+    #         pos = target_pos,
+    #         quat = target_quat,
+    #         gripper = target_gripper,
+    #         world_frame = world_frame,
+    #         reliable = True,
+    #         blocking = True,
+    #     )
+    #     return True
+    
+    # Otherwise, loop and check if target is reached
+    target_rot = R.from_quat(target_quat)
+    
+    for it in range(max_iter):
+        # Get current observation
+        observation = robot.get_servo_observation()
+        ee_pose = observation.ee_pose
+        current_pos = ee_pose[:3, 3]
+        current_rot = R.from_matrix(ee_pose[:3, :3])
+        
+        # Calculate position error
+        pos_err = np.linalg.norm(current_pos - target_pos)
+        
+        # Calculate rotation error using quaternion distance (more robust than RPY)
+        # This gives the angle between rotations in degrees
+        rot_diff = target_rot.inv() * current_rot
+        rot_err = np.abs(rot_diff.as_rotvec())
+        rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
+        
+        # Check if target is reached
+        reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
+        if reached:
+            print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
+            return True
+        
+        # Move towards target
+        robot.arm_to_ee_pose(
+            pos = target_pos,
+            quat = target_quat,
+            gripper = target_gripper,
+            world_frame = world_frame,
+            reliable = True,
+            blocking = True,
+        )
+    
+    # Failed to reach target within max_iter
+    print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
+    return False
+
+
+
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
 
@@ -114,8 +200,23 @@ class ROS2LfdLeader:
                 vis_utils.visualize_trajectory(self.policy, self.relative_motion, self.visualization_data_path, idx)
             breakpoint()
 
-        self.robot.reset_manipulation_base_pose()
-        print('reset robot manip base pose!')
+        # Go to initial pose
+        obs_init = self.robot.get_servo_observation()
+        curr_pos = obs_init.ee_pose[:3, 3]
+        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
+        self.robot.arm_to_ee_pose(
+            pos = curr_pos,
+            quat = curr_quat, 
+            gripper = 1.0, 
+            world_frame = False,
+            reliable = True,
+            blocking = True,
+        )
+
+        start = input("Start mission: Y/N?")
+        if start.capitalize() != "Y":
+            return
+
         try:
             while True:
                 loop_timer.mark_start()
@@ -161,7 +262,6 @@ class ROS2LfdLeader:
                     )# [:, [2,1,0]] # in RGB format
 
                     # DEBUG preprocess head image:
-                    from PIL import Image
                     head_image_PIL = Image.fromarray(head_color_image)
                     original_height, original_width = head_color_image.shape[:2] # head: (1280, 720)
                     goal_width, goal_height = 320, 240
@@ -250,14 +350,25 @@ class ROS2LfdLeader:
                     gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
         
                     print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]} idx{_t_debug}')
-                    self.robot.arm_to_ee_pose(
-                        pos = pos,
-                        quat = quat, 
-                        gripper=gripper,  # gripper
+                    # self.robot.arm_to_ee_pose(
+                    #     pos = pos,
+                    #     quat = quat, 
+                    #     gripper=gripper,  # gripper
+                    #     world_frame=False,
+                    #     reliable=True,
+                    #     blocking=True,
+                    # )
+                    go_to_target_pose(
+                        self.robot, 
+                        pos, 
+                        quat, 
+                        gripper, 
+                        max_iter=10, 
+                        pos_err_threshold=0.01, 
+                        rot_err_threshold=2, 
                         world_frame=False,
-                        reliable=True,
-                        blocking=True,
-                    )
+                        non_blocking=False)
+                        
                     # breakpoint()
                     if action[8] >= PROGRESS_TH:
                         print('task succeed!')
@@ -288,9 +399,20 @@ class ROS2LfdLeader:
                 #         break
 
                 
-
         finally:
-            pass
+            # Go to initial pose
+            input("Open the gripper: Y/N?")
+            obs = self.robot.get_servo_observation()
+            curr_pos = obs.ee_pose[:3, 3]
+            curr_quat = R.from_matrix(obs.ee_pose[:3, :3]).as_quat()
+            self.robot.arm_to_ee_pose(
+                pos = curr_pos,
+                quat = curr_quat, 
+                gripper = 1.0, 
+                world_frame = False,
+                reliable = True,
+                blocking = True,
+            )
 
 def load_gt_traj(file_path: str, matrix=False) -> list[np.ndarray]:
     with open(file_path, 'r') as f:
