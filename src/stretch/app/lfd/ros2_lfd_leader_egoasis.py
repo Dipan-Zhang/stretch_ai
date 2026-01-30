@@ -42,7 +42,7 @@ from policies.robot_policy_wrapper import PolicyVLAWorldModelWrapperStretchRobot
 import time 
 from termcolor import colored
 from scipy.spatial.transform import Rotation as R
-PROGRESS_TH=0.95
+PROGRESS_TH=0.85
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
 DEFAULT_FPS = 15
@@ -219,16 +219,16 @@ def go_to_target_pose(
         True if target reached (or command sent when non_blocking=False), False otherwise
     """
     # If non_blocking=False, just send the command and return
-    if not non_blocking:
-        robot.arm_to_ee_pose(
-            pos = target_pos,
-            quat = target_quat,
-            gripper = target_gripper,
-            world_frame = world_frame,
-            reliable = True,
-            blocking = True,
-        )
-        return True
+    # if not non_blocking:
+    #     robot.arm_to_ee_pose(
+    #         pos = target_pos,
+    #         quat = target_quat,
+    #         gripper = target_gripper,
+    #         world_frame = world_frame,
+    #         reliable = True,
+    #         blocking = True,
+    #     )
+    #     return True
     
     # Otherwise, loop and check if target is reached
     target_rot = R.from_quat(target_quat)
@@ -281,7 +281,7 @@ class ROS2LfdLeaderEgoasis:
         robot_config_path: str = "./policy_server/robot_config.yaml",
         teleop_mode: str = "base_x",
         record_success: bool = False,
-        action_chunk_size=8,
+        action_chunk_size=6,
         policy_only=True,
         action_meta_fpath: str = "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
         state_meta_fpath="/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
@@ -355,6 +355,20 @@ class ROS2LfdLeaderEgoasis:
     
         self.robot.reset_manipulation_base_pose()
         print('reset robot manip base pose!')
+
+        # Go to initial pose
+        obs_init = self.robot.get_servo_observation()
+        curr_pos = obs_init.ee_pose[:3, 3]
+        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
+        self.robot.arm_to_ee_pose(
+            pos = curr_pos,
+            quat = curr_quat, 
+            gripper = 1.0, 
+            world_frame = False,
+            reliable = True,
+            blocking = True,
+        )
+
         start = input("Start mission: Y/N?")
         if start.capitalize() != "Y":
             return
@@ -510,14 +524,26 @@ class ROS2LfdLeaderEgoasis:
                     loop_timer.mark_end()
                     loop_timer.pretty_print()
 
-                # Stop condition for forced execution
                 stop = False
+                PROGRESS_STOP_THRESHOLD = 0.95
                 if len(action) == 9:
-                    stop = action[-1] > PROGRESS_TH
- 
+                    stop = action[-1] > PROGRESS_STOP_THRESHOLD
+
 
         finally:
-            pass
+            # Go to initial pose
+            input("Open the gripper: Y/N?")
+            obs = self.robot.get_servo_observation()
+            curr_pos = obs.ee_pose[:3, 3]
+            curr_quat = R.from_matrix(obs.ee_pose[:3, :3]).as_quat()
+            self.robot.arm_to_ee_pose(
+                pos = curr_pos,
+                quat = curr_quat, 
+                gripper = 1.0, 
+                world_frame = False,
+                reliable = True,
+                blocking = True,
+            )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
