@@ -189,85 +189,7 @@ def prepare_state_abs(observation: dict, joint_states) -> np.ndarray:
 #             data_batch_np[key] = value.numpy()
 #     return data_batch_np
 
-def go_to_target_pose(
-    robot: HomeRobotZmqClient, 
-    target_pos: np.ndarray, 
-    target_quat: np.ndarray, 
-    target_gripper:float, 
-    max_iter: int = 10, 
-    pos_err_threshold: float = 0.01, 
-    rot_err_threshold: float = 2,
-    world_frame: bool = False,
-    non_blocking: bool = False,
-):
-    """
-    Go to the target pose using the robot's arm and gripper.
-    
-    Args:
-        robot: The robot client
-        target_pos: Target position (3D array)
-        target_quat: Target quaternion (xyzw format)
-        target_gripper: Target gripper value
-        max_iter: Maximum number of iterations (only used when non_blocking=True)
-        pos_err_threshold: Position error threshold in meters
-        rot_err_threshold: Rotation error threshold in degrees
-        world_frame: Whether to use world frame
-        non_blocking: If False, send command once and return True immediately.
-                      If True, loop and check if target is reached.
-        
-    Returns:
-        True if target reached (or command sent when non_blocking=False), False otherwise
-    """
-    # If non_blocking=False, just send the command and return
-    # if not non_blocking:
-    #     robot.arm_to_ee_pose(
-    #         pos = target_pos,
-    #         quat = target_quat,
-    #         gripper = target_gripper,
-    #         world_frame = world_frame,
-    #         reliable = True,
-    #         blocking = True,
-    #     )
-    #     return True
-    
-    # Otherwise, loop and check if target is reached
-    target_rot = R.from_quat(target_quat)
-    
-    for it in range(max_iter):
-        # Get current observation
-        observation = robot.get_servo_observation()
-        ee_pose = observation.ee_pose
-        current_pos = ee_pose[:3, 3]
-        current_rot = R.from_matrix(ee_pose[:3, :3])
-        
-        # Calculate position error
-        pos_err = np.linalg.norm(current_pos - target_pos)
-        
-        # Calculate rotation error using quaternion distance (more robust than RPY)
-        # This gives the angle between rotations in degrees
-        rot_diff = target_rot.inv() * current_rot
-        rot_err = np.abs(rot_diff.as_rotvec())
-        rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
-        
-        # Check if target is reached
-        reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
-        if reached:
-            print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
-            return True
-        
-        # Move towards target
-        robot.arm_to_ee_pose(
-            pos = target_pos,
-            quat = target_quat,
-            gripper = target_gripper,
-            world_frame = world_frame,
-            reliable = True,
-            blocking = True,
-        )
-    
-    # Failed to reach target within max_iter
-    print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
-    return False
+
 
 
 class ROS2LfdLeaderEgoasis:
@@ -281,7 +203,7 @@ class ROS2LfdLeaderEgoasis:
         robot_config_path: str = "./policy_server/robot_config.yaml",
         teleop_mode: str = "base_x",
         record_success: bool = False,
-        action_chunk_size=6,
+        action_chunk_size=15, # 15 or 8
         policy_only=True,
         action_meta_fpath: str = "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
         state_meta_fpath="/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
@@ -347,6 +269,87 @@ class ROS2LfdLeaderEgoasis:
         
         if self.relative_motion:
             print(colored('Relative motion is enabled', 'red'))
+
+
+    def go_to_target_pose(
+        self,
+        target_pos: np.ndarray, 
+        target_quat: np.ndarray, 
+        target_gripper:float, 
+        max_iter: int = 10, 
+        pos_err_threshold: float = 0.01, 
+        rot_err_threshold: float = 2,
+        world_frame: bool = False,
+        # non_blocking: bool = False,
+    ):
+        """
+        Go to the target pose using the robot's arm and gripper.
+        
+        Args:
+            robot: The robot client
+            target_pos: Target position (3D array)
+            target_quat: Target quaternion (xyzw format)
+            target_gripper: Target gripper value
+            max_iter: Maximum number of iterations (only used when non_blocking=True)
+            pos_err_threshold: Position error threshold in meters
+            rot_err_threshold: Rotation error threshold in degrees
+            world_frame: Whether to use world frame
+            non_blocking: If False, send command once and return True immediately.
+                        If True, loop and check if target is reached.
+            
+        Returns:
+            True if target reached (or command sent when non_blocking=False), False otherwise
+        """
+        # If non_blocking=False, just send the command and return
+        # if not non_blocking:
+        #     robot.arm_to_ee_pose(
+        #         pos = target_pos,
+        #         quat = target_quat,
+        #         gripper = target_gripper,
+        #         world_frame = world_frame,
+        #         reliable = True,
+        #         blocking = True,
+        #     )
+        #     return True
+        
+        # Otherwise, loop and check if target is reached
+        target_rot = R.from_quat(target_quat)
+        
+        for it in range(max_iter):
+            # Get current observation
+            observation = self.robot.get_servo_observation()
+            ee_pose = observation.ee_pose
+            current_pos = ee_pose[:3, 3]
+            current_rot = R.from_matrix(ee_pose[:3, :3])
+            
+            # Calculate position error
+            pos_err = np.linalg.norm(current_pos - target_pos)
+            
+            # Calculate rotation error using quaternion distance (more robust than RPY)
+            # This gives the angle between rotations in degrees
+            rot_diff = target_rot.inv() * current_rot
+            rot_err = np.abs(rot_diff.as_rotvec())
+            rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
+            
+            # Check if target is reached
+            reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
+            if reached:
+                print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
+                return True
+            
+            # Move towards target
+            self.robot.arm_to_ee_pose(
+                pos = target_pos,
+                quat = target_quat,
+                gripper = target_gripper,
+                world_frame = world_frame,
+                reliable = True,
+                blocking = True,
+            )
+        
+        # Failed to reach target within max_iter
+        print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
+        return False
 
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
@@ -493,15 +496,13 @@ class ROS2LfdLeaderEgoasis:
                 #     reliable=True,
                 #     blocking=True,
                 # )
-                go_to_target_pose(
-                    self.robot, 
-                    pos, 
-                    quat, 
-                    gripper, 
+                self.go_to_target_pose(
+                    target_pos=pos, 
+                    target_quat=quat, 
+                    target_gripper=gripper, 
                     max_iter=10, 
                     pos_err_threshold=0.01, 
                     rot_err_threshold=2, 
-                    non_blocking=True,
                     world_frame=False)
 
                 if progress >= PROGRESS_TH:
