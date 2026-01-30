@@ -189,33 +189,34 @@ def prepare_state_abs(observation: dict, joint_states) -> np.ndarray:
 #             data_batch_np[key] = value.numpy()
 #     return data_batch_np
 
-
-
-
 class ROS2LfdLeaderEgoasis:
     def __init__(
         self,
         robot: HomeRobotZmqClient,
-        policy_cfg: edict,
-        policy_weight_fpath: str,
         verbose: bool = False,
         logging_cfg: edict = None,
         robot_config_path: str = "./policy_server/robot_config.yaml",
         teleop_mode: str = "base_x",
         record_success: bool = False,
-        action_chunk_size=15, # 15 or 8
-        policy_only=True,
-        action_meta_fpath: str = "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
-        state_meta_fpath="/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
-        device: str = "cuda",
         depth_filter_k=None,
         disable_recording: bool = False,
         relative_motion: bool = False,
         run_policy: bool = True,
+        policy_kwargs: dict = 
+        {   
+            "cfg": None,
+            "weight_ckpt": None,
+            "action_chunk_size": 8,
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
+            "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
+            "policy_only": True,
+            "device": "cuda",
+        },
+
     ):
         self.robot = robot
-
-        self.device = device
+        self.policy_kwargs = edict(policy_kwargs)
+        self.device = self.policy_kwargs.device
         self.teleop_mode = teleop_mode
         self.depth_filter_k = depth_filter_k
         self.record_success = record_success
@@ -226,14 +227,14 @@ class ROS2LfdLeaderEgoasis:
             logging_cfg.task_name = INSTRUCTION.replace(" ", "_")
         
         self.metadata = {
+            "backend": "ros2",
             "recording_type": "Policy evaluation",
             "user_name": logging_cfg.user_name,
             "task_name": logging_cfg.task_name,
             "env_name": logging_cfg.env_name,
             "policy_name": 'egoasis',
-            "policy_path": policy_weight_fpath,
             "teleop_mode": self.teleop_mode,
-            "backend": "ros2",
+            "policy_kwargs": self.policy_kwargs,
         }
 
         self._disable_recording = disable_recording
@@ -243,12 +244,12 @@ class ROS2LfdLeaderEgoasis:
             logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
         )
         self.policy = PolicyVLAWorldModelWrapperStretchRobot(
-            cfg=policy_cfg,
-            weight_ckpt=policy_weight_fpath,
-            action_chunk_size=action_chunk_size,
-            policy_only=policy_only,
-            action_meta_fpath=action_meta_fpath,
-            state_meta_fpath=state_meta_fpath,
+            cfg=self.policy_kwargs.cfg,
+            weight_ckpt=self.policy_kwargs.weight_ckpt,
+            action_chunk_size=self.policy_kwargs.action_chunk_size,
+            policy_only=self.policy_kwargs.policy_only,
+            action_meta_fpath=self.policy_kwargs.action_meta_fpath,
+            state_meta_fpath=self.policy_kwargs.state_meta_fpath,
             online_update_robot_state=True,
             online_update_visual_state=True,
             online_update_extrinsics_state=True,
@@ -351,10 +352,108 @@ class ROS2LfdLeaderEgoasis:
         print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
         return False
 
+    def prepare_observation(self, observation: dict) -> dict:
+        # Label joint states with appropriate format
+        joint_states = {
+            k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
+        }
+
+        # get raw image
+        gripper_color_image = observation.ee_rgb # RGB 
+        gripper_depth_image = (
+            observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
+        )
+        head_color_image = observation.rgb
+        head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
+        head_cam_K = observation.camera_K
+        gripper_cam_K = observation.ee_camera_K
+        gripper_cam_pose = observation.ee_camera_pose
+        head_cam_pose = observation.camera_pose
+
+        # process images to the target size
+        head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
+        head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
+
+        original_height, original_width = gripper_color_image.shape[:2]
+        gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
+        gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
+        gripper_cam_K_resized= gripper_cam_K.copy()
+        scale_x = GRIPPER_GOAL_SIZE[1] / original_width
+        scale_y = GRIPPER_GOAL_SIZE[0] / original_height
+        gripper_cam_K_resized[0, 0] *= scale_x
+        gripper_cam_K_resized[1, 1] *= scale_y
+        gripper_cam_K_resized[0, 2] *= scale_x
+        gripper_cam_K_resized[1, 2] *= scale_y
+
+        # Acquire current gripper state
+        current_state = prepare_state_abs(observation, joint_states) # (17,) T_world_gripper, gripper_closure
+        obs = {
+            "language_instruction": INSTRUCTION,  
+            "observation.images.gripper": gripper_color_resized,  # (240, 320, 3)
+            "observation.depths.gripper": gripper_depth_resized,  # (240, 320)
+            "observation.images.head": head_color_resized,  # (320, 320, 3)
+            "observation.depths.head": head_depth_resized,  # (320, 320)
+            "HEAD_CAM_K": head_cam_K_resized,  # (3, 3)
+            "EE_CAM_K": gripper_cam_K_resized,  # (3, 3)
+            "observation.state": current_state,  # (17), T_world_gripper, gripper_closure = state[:16].reshape(4, 4), state[16:]
+            "head_cam_pose": head_cam_pose,  # (4, 4)
+            "ee_cam_pose": gripper_cam_pose,  # (4, 4)
+        }
+        return obs
+    
+
+    def visualize_action(self, obs, outputs):
+        current_state = obs["observation.state"].copy()
+        head_color_resized = obs["observation.images.head"].copy()
+        gripper_color_resized = obs["observation.images.gripper"].copy()
+        head_cam_K_resized = obs["HEAD_CAM_K"].copy()
+        gripper_cam_K_resized = obs["EE_CAM_K"].copy()
+        T_base_head_cam = obs["head_cam_pose"].copy()  # (4,4)
+        T_base_ee_cam = obs["ee_cam_pose"].copy()  # (4,4)
+        latest_action_chunk = outputs["latest_action_chunk"].cpu().numpy().copy()
+
+        current_state_vis = current_state[:16].reshape(4, 4)
+        tra_curr_state_vis = current_state_vis[:3, 3]
+        quat_curr_state_vis = R.from_matrix(current_state_vis[:3, :3]).as_quat()
+        curr_state_vis = np.zeros(9)
+        curr_state_vis[:3] = tra_curr_state_vis
+        curr_state_vis[3:7] = quat_curr_state_vis
+        curr_state_vis[7] = current_state[16]
+        curr_state_vis = curr_state_vis.astype(np.float32)
+        head_image_for_vis = head_color_resized
+        gripper_cam_for_vis = gripper_color_resized
+
+        # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
+        assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
+        projected_img = vis_utils.project_action_predictions(
+            # curr_state_vis[None], 
+            latest_action_chunk,
+            # action[None],
+            T_base_head_cam.astype(np.float32),
+            head_cam_K_resized.astype(np.float32),
+            head_image_for_vis
+        ) # [320, 320]
+        projected_img_gripper = vis_utils.project_action_predictions(
+            # curr_state_vis[None], 
+            latest_action_chunk,
+            # action[None],
+            T_base_ee_cam.astype(np.float32),
+            gripper_cam_K_resized.astype(np.float32),
+            gripper_cam_for_vis
+        ) # [240, 320]
+        projected_img_gripper = projected_img_gripper[:, 40:280]
+
+        projected_img = cv2.resize(projected_img, (240, 240))
+        vis = np.concatenate([projected_img, projected_img_gripper], axis=1)
+
+        # Ensure image in imshow is uint8 BGR. projected_img is RGB.
+        cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+        cv2.waitKey(1)
+
+
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
         loop_timer = lt.LoopStats("lfd_leader_egoasis")
-        _t_debug = 0
     
         self.robot.reset_manipulation_base_pose()
         print('reset robot manip base pose!')
@@ -381,121 +480,23 @@ class ROS2LfdLeaderEgoasis:
                 loop_timer.mark_start()
 
                 # Get observation
-                observation = self.robot.get_servo_observation()
-
-                # Label joint states with appropriate format
-                joint_states = {
-                    k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
-                }
-
-                # get raw image
-                gripper_color_image = observation.ee_rgb # RGB 
-                gripper_depth_image = (
-                    observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
-                )
-                head_color_image = observation.rgb
-                head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
-                head_cam_K = observation.camera_K
-                gripper_cam_K = observation.ee_camera_K
-                gripper_cam_pose = observation.ee_camera_pose
-                head_cam_pose = observation.camera_pose
-
-                # process images to the target size
-                head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
-                head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
-
-                original_height, original_width = gripper_color_image.shape[:2]
-                gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-                gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-                gripper_cam_K_resized= gripper_cam_K.copy()
-                scale_x = GRIPPER_GOAL_SIZE[1] / original_width
-                scale_y = GRIPPER_GOAL_SIZE[0] / original_height
-                gripper_cam_K_resized[0, 0] *= scale_x
-                gripper_cam_K_resized[1, 1] *= scale_y
-                gripper_cam_K_resized[0, 2] *= scale_x
-                gripper_cam_K_resized[1, 2] *= scale_y
-
-                # Acquire current gripper state
-                current_state = prepare_state_abs(observation, joint_states) # (17,) T_world_gripper, gripper_closure
-                obs = {
-                    "language_instruction": INSTRUCTION,  
-                    "observation.images.gripper": gripper_color_resized,  # (240, 320, 3)
-                    "observation.depths.gripper": gripper_depth_resized,  # (240, 320)
-                    "observation.images.head": head_color_resized,  # (320, 320, 3)
-                    "observation.depths.head": head_depth_resized,  # (320, 320)
-                    "HEAD_CAM_K": head_cam_K_resized,  # (3, 3)
-                    "EE_CAM_K": gripper_cam_K_resized,  # (3, 3)
-                    "observation.state": current_state,  # (17), T_world_gripper, gripper_closure = state[:16].reshape(4, 4), state[16:]
-                    "head_cam_pose": head_cam_pose,  # (4, 4)
-                    "ee_cam_pose": gripper_cam_pose,  # (4, 4)
-                }
-                
+                _obs = self.robot.get_servo_observation()
+                obs = self.prepare_observation(_obs)
 
                 # Send observation to polic
                 action = None
                 with torch.inference_mode():
                     outputs = self.policy.inference(obs, action_only=True) # relative cartesian pose xyz, quaternion wxyz
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
-                    latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
-
-                pos = action[:3]
-                quat = action[3:7]
-                gripper = action[7] 
-                progress = action[-1]
+                    # latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
+                pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
+                gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
                 if self.verbose:
-                    T_base_head_cam = observation.camera_pose  # (4,4)
-                    T_base_ee_cam = observation.ee_camera_pose
-                    current_state_vis = current_state.copy()[:16].reshape(4, 4)
-                    tra_curr_state_vis = current_state_vis[:3, 3]
-                    quat_curr_state_vis = R.from_matrix(current_state_vis[:3, :3]).as_quat()
-                    curr_state_vis = np.zeros(9)
-                    curr_state_vis[:3] = tra_curr_state_vis
-                    curr_state_vis[3:7] = quat_curr_state_vis
-                    curr_state_vis[7] = current_state[16]
-                    curr_state_vis = curr_state_vis.astype(np.float32)
-                    head_image_for_vis = head_color_resized.copy()
-                    gripper_cam_for_vis = gripper_color_resized.copy()
+                    self.visualize_action(obs, outputs)
+                    loop_timer.mark_end()
+                    loop_timer.pretty_print()
 
-                    # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
-                    assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
-                    projected_img = vis_utils.project_action_predictions(
-                        # curr_state_vis[None], 
-                        latest_action_chunk,
-                        # action[None],
-                        T_base_head_cam.astype(np.float32),
-                        head_cam_K_resized.astype(np.float32),
-                        head_image_for_vis
-                    ) # [320, 320]
-                    projected_img_gripper = vis_utils.project_action_predictions(
-                        # curr_state_vis[None], 
-                        latest_action_chunk,
-                        # action[None],
-                        T_base_ee_cam.astype(np.float32),
-                        gripper_cam_K_resized.astype(np.float32),
-                        gripper_cam_for_vis
-                    ) # [240, 320]
-                    projected_img_gripper = projected_img_gripper[:, 40:280]
-
-                    projected_img = cv2.resize(projected_img, (240, 240))
-                    vis = np.concatenate([projected_img, projected_img_gripper], axis=1)
-
-                    # Ensure image in imshow is uint8 BGR. projected_img is RGB.
-                    cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
-                    cv2.waitKey(1)
-
-                # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
-                gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
-                # print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[-1]} idx{_t_debug}')
-                
-                # self.robot.arm_to_ee_pose(
-                #     pos = pos,
-                #     quat = quat, 
-                #     gripper=gripper,  # gripper
-                #     world_frame=False,
-                #     reliable=True,
-                #     blocking=True,
-                # )
                 self.go_to_target_pose(
                     target_pos=pos, 
                     target_quat=quat, 
@@ -508,28 +509,6 @@ class ROS2LfdLeaderEgoasis:
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
                     break
-                _t_debug += 1
-                
-                # # convert the inputs, output to numpy dict
-                # data_batch_np = dict_value_torch2numpy(data_batch)
-                # outputs_np = dict_value_torch2numpy(outputs)
-                # self._recorder.add(
-                #     ee_rgb=gripper_color_image,
-                #     ee_depth=gripper_depth_image,
-                #     ee_cam_pose=gripper_cam_pose,
-                #     xyz=pos,
-                #     quaternion=quat,
-                # )
-
-                if self.verbose:
-                    loop_timer.mark_end()
-                    loop_timer.pretty_print()
-
-                stop = False
-                PROGRESS_STOP_THRESHOLD = 0.95
-                if len(action) == 9:
-                    stop = action[-1] > PROGRESS_STOP_THRESHOLD
-
 
         finally:
             # Go to initial pose
@@ -592,21 +571,25 @@ if __name__ == "__main__":
         robot.switch_to_manipulation_mode()
         robot.move_to_manip_posture()
 
-
     logging_cfg = edict(OmegaConf.load(args.logging_cfg))
     policy_cfg = edict(OmegaConf.load(args.policy_cfg))
     policy_cfg.DATA.load_tracks = False
     leader = ROS2LfdLeaderEgoasis(
         robot=robot,
-        policy_cfg=policy_cfg,
-        policy_weight_fpath=args.ckpt,
         verbose=args.verbose,
         logging_cfg=logging_cfg,
         teleop_mode=args.teleop_mode,
         record_success=args.record_success,
-        device=args.device,
+        policy_kwargs={
+            "cfg": policy_cfg,
+            "weight_ckpt": args.ckpt,
+            "action_chunk_size": 15,
+            "policy_only": True,
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
+            "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
+            "device": args.device,
+        },
         relative_motion=args.relative_motion,
-        run_policy=not args.dummy_inference,
     )
 
     try:
