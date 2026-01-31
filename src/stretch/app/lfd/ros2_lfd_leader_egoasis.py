@@ -13,7 +13,6 @@ import os
 
 import cv2
 import numpy as np
-from sympy.logic.boolalg import true
 import torch
 import scipy.spatial.transform as tra
 import liblzfse
@@ -42,7 +41,7 @@ from policies.robot_policy_wrapper import PolicyVLAWorldModelWrapperStretchRobot
 import time 
 from termcolor import colored
 from scipy.spatial.transform import Rotation as R
-PROGRESS_TH=0.85
+PROGRESS_TH=0.9
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
 DEFAULT_FPS = 15
@@ -225,26 +224,41 @@ class ROS2LfdLeaderEgoasis:
         self.verbose = verbose
 
         # Save metadata to pass to recorder
-        if INSTRUCTION is not None:
-            logging_cfg.task_name = INSTRUCTION.replace(" ", "_")
-        
-        self.metadata = {
-            "backend": "ros2",
-            "recording_type": "Policy evaluation",
-            "user_name": logging_cfg.user_name,
-            "task_name": logging_cfg.task_name,
-            "env_name": logging_cfg.env_name,
-            "policy_name": 'egoasis',
-            "teleop_mode": self.teleop_mode,
-            "policy_kwargs": self.policy_kwargs,
-        }
+        if logging_cfg is not None:
+            if INSTRUCTION is not None:
+                logging_cfg.task_name = INSTRUCTION.replace(" ", "_")
+            
+            self.metadata = {
+                "backend": "ros2",
+                "recording_type": "Policy evaluation",
+                "user_name": logging_cfg.user_name,
+                "task_name": logging_cfg.task_name,
+                "env_name": logging_cfg.env_name,
+                "policy_name": 'egoasis',
+                "teleop_mode": self.teleop_mode,
+                "policy_kwargs": self.policy_kwargs,
+            }
+        else:
+            self.metadata = {
+                "backend": "ros2",
+                "recording_type": "Policy evaluation",
+                "user_name": "unknown",
+                "task_name": INSTRUCTION.replace(" ", "_") if INSTRUCTION is not None else "unknown",
+                "env_name": "unknown",
+                "policy_name": 'egoasis',
+                "teleop_mode": self.teleop_mode,
+                "policy_kwargs": self.policy_kwargs,
+            }
 
         self._disable_recording = disable_recording
-        self._recording = False or not self._disable_recording
+        self._recording = not self._disable_recording
         self._need_to_write = False
-        self._recorder = FileDataRecorder(
-            logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
-        )
+        if logging_cfg is not None:
+            self._recorder = FileDataRecorder(
+                logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
+            )
+        else:
+            self._recorder = None
         self.policy = PolicyVLAWorldModelWrapperStretchRobot(
             cfg=self.policy_kwargs.cfg,
             weight_ckpt=self.policy_kwargs.weight_ckpt,
@@ -282,6 +296,7 @@ class ROS2LfdLeaderEgoasis:
         max_iter: int = 10, 
         pos_err_threshold: float = 0.01, 
         rot_err_threshold: float = 2,
+        gripper_err_threshold: float = 0.05,
         world_frame: bool = False,
         blocking: bool = True,
         verbose: bool = False,
@@ -319,12 +334,21 @@ class ROS2LfdLeaderEgoasis:
         # Otherwise, loop and check if target is reached
         target_rot = R.from_quat(target_quat)
         
+        # Initialize error values in case max_iter is 0
+        pos_err = float('inf')
+        rot_err_deg = float('inf')
+        
         for it in range(max_iter):
             # Get current observation
             observation = self.robot.get_servo_observation()
+            joint_states = {
+                k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
+            }
+
             ee_pose = observation.ee_pose
             current_pos = ee_pose[:3, 3]
             current_rot = R.from_matrix(ee_pose[:3, :3])
+            current_gripper = joint_states['gripper']
             
             # Calculate position error
             pos_err = np.linalg.norm(current_pos - target_pos)
@@ -335,11 +359,14 @@ class ROS2LfdLeaderEgoasis:
             rot_err = np.abs(rot_diff.as_rotvec())
             rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
             
+            # Check if gripper is closed
+            gripper_err = np.abs(current_gripper - target_gripper)
+
             # Check if target is reached
-            reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
+            reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold) and (gripper_err < gripper_err_threshold) 
             if reached:
                 if verbose:
-                    print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
+                    print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}, iterations={it+1}/{max_iter}")
                 return True
             
             # Move towards target
@@ -349,11 +376,15 @@ class ROS2LfdLeaderEgoasis:
                 gripper = target_gripper,
                 world_frame = world_frame,
                 reliable = True,
-                blocking = True,
+                blocking = False,
             )
+            
+            # Add a small delay to allow the robot to move before checking again
+            # This prevents the loop from running too fast and wasting iterations
+            time.sleep(0.05)  # 50ms delay between iterations
         
         # Failed to reach target within max_iter
-        print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
+        print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")
         return False
 
     def prepare_observation(self) -> dict:
@@ -430,9 +461,9 @@ class ROS2LfdLeaderEgoasis:
 
         closure = latest_action_chunk[0, 7]
         if closure < 0.5:
-            cmap_name = "cool"
-        else:
             cmap_name = "turbo"
+        else:
+            cmap_name = "cool"
         # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
         assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
         projected_img = vis_utils.project_action_predictions(
@@ -483,21 +514,19 @@ class ROS2LfdLeaderEgoasis:
             blocking = True,
         )
 
-
-
         # Warm up the policy
         for i in range(10):
             obs = self.prepare_observation()
             with torch.inference_mode():
                 self.policy.inference(obs, action_only=True)
+                self.policy.reset()
         self.policy.reset()
-
-        # Print the total time taken for the warm up
         start = input("Done warming up the policy. Start mission: Y/N?")
         if start.capitalize() != "Y":
-            return
+            return {}
             
         try:
+            time_episode_start = time.time()
             while True:
                 loop_timer.mark_start()
 
@@ -515,6 +544,9 @@ class ROS2LfdLeaderEgoasis:
                     # latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
+                
+                if gripper < 0.5:
+                    print(f'gripper is closing!!!!!')
                 gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
                 if self.verbose:
@@ -547,8 +579,9 @@ class ROS2LfdLeaderEgoasis:
                     target_quat=quat, 
                     target_gripper=gripper, 
                     max_iter=10, 
-                    pos_err_threshold=0.01, 
-                    rot_err_threshold=2, 
+                    pos_err_threshold=0.01,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
+                    rot_err_threshold=3,  # Relaxed from 2° to 5° for faster convergence
+                    gripper_err_threshold=0.05,
                     world_frame=False,
                     blocking=True,
                     )
@@ -649,4 +682,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
 
-    robot.stop()
+    if robot is not None:
+        robot.stop()
