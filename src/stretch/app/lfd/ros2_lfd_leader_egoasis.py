@@ -293,7 +293,7 @@ class ROS2LfdLeaderEgoasis:
         target_pos: np.ndarray, 
         target_quat: np.ndarray, 
         target_gripper:float, 
-        max_iter: int = 10, 
+        max_iter_time: int = 0.1, 
         pos_err_threshold: float = 0.01, 
         rot_err_threshold: float = 2,
         gripper_err_threshold: float = 0.05,
@@ -338,7 +338,8 @@ class ROS2LfdLeaderEgoasis:
         pos_err = float('inf')
         rot_err_deg = float('inf')
         
-        for it in range(max_iter):
+        start_time = time.time()
+        while time.time() - start_time < max_iter_time:
             # Get current observation
             observation = self.robot.get_servo_observation()
             joint_states = {
@@ -366,7 +367,7 @@ class ROS2LfdLeaderEgoasis:
             reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold) and (gripper_err < gripper_err_threshold) 
             if reached:
                 if verbose:
-                    print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}, iterations={it+1}/{max_iter}")
+                    print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}, time={time.time() - start_time:.3f}s")
                 return True
             
             # Move towards target
@@ -384,7 +385,7 @@ class ROS2LfdLeaderEgoasis:
             time.sleep(0.05)  # 50ms delay between iterations
         
         # Failed to reach target within max_iter
-        print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")
+        print(f"Failed to reach target after {time.time() - start_time:.3f}s: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")
         return False
 
     def prepare_observation(self) -> dict:
@@ -493,6 +494,22 @@ class ROS2LfdLeaderEgoasis:
         cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
         cv2.waitKey(1)
 
+    def robot_standby(self):
+        obs_init = self.robot.get_servo_observation()
+        curr_pos = obs_init.ee_pose[:3, 3]
+        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
+        self.go_to_target_pose(
+            target_pos=curr_pos, 
+            target_quat=curr_quat, 
+            target_gripper=0.9, 
+            max_iter_time=2, 
+            pos_err_threshold=0.01, 
+            rot_err_threshold=1, 
+            gripper_err_threshold=0.05,
+            world_frame=False,
+            blocking=True,
+        )
+        time.sleep(0.05)
 
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
@@ -502,17 +519,7 @@ class ROS2LfdLeaderEgoasis:
         print('reset robot manip base pose!')
 
         # Go to initial pose
-        obs_init = self.robot.get_servo_observation()
-        curr_pos = obs_init.ee_pose[:3, 3]
-        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
-        self.robot.arm_to_ee_pose(
-            pos = curr_pos,
-            quat = curr_quat, 
-            gripper = 1.0, 
-            world_frame = False,
-            reliable = True,
-            blocking = True,
-        )
+        self.robot_standby()
 
         # Warm up the policy
         for i in range(10):
@@ -521,32 +528,59 @@ class ROS2LfdLeaderEgoasis:
                 self.policy.inference(obs, action_only=True)
                 self.policy.reset()
         self.policy.reset()
-        start = input("Done warming up the policy. Start mission: Y/N?")
-        if start.capitalize() != "Y":
-            return {}
-            
+        time_episode_start = time.time()
+
         try:
-            time_episode_start = time.time()
+            # Take keyboard input to start the mission, otherwise the robot will be in standby mode
+            print("Robot is in standby mode. Press SPACEBAR to start the mission, or ESC to exit.")
+            mission_started = False
+            while not mission_started:
+                # Get observation to show current camera feed
+                obs = self.prepare_observation()
+                head_image = obs["observation.images.head"]
+                gripper_image = obs["observation.images.gripper"]
+                
+                # Create a combined view for standby mode
+                gripper_image_bgr = cv2.cvtColor(gripper_image, cv2.COLOR_RGB2BGR)
+                gripper_resized = cv2.resize(gripper_image_bgr, (320, 240))
+
+                cv2.putText(gripper_resized, "STANDBY - Press SPACE to start", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
+                
+                cv2.imshow("Standby Mode - Press SPACE to start mission", gripper_resized)
+                
+                # Check for key press
+                key = cv2.waitKey(1) & 0xFF
+                if key == 32:  # SPACEBAR
+                    self.policy.reset()
+                    time.sleep(0.1)
+                    print("Mission started!")
+                    mission_started = True
+                    cv2.destroyAllWindows()
+                    time.sleep(0.1)
+                    break
+                
+                elif key == 27:  # ESC
+                    print("Mission cancelled by user.")
+                    return {}
+                
+                # Keep robot in standby pose
+                self.robot_standby()
+                time.sleep(0.1)  # Small delay to prevent excessive CPU usage
+
             while True:
                 loop_timer.mark_start()
 
                 # Get observation
                 time_start = time.time()
                 obs = self.prepare_observation()
-                # print(f'===================> data collection time: {time.time() - time_start:.3f}s')
 
-                # Send observation to polic
-                # time_start = time.time()
                 action = None
                 with torch.inference_mode():
                     outputs = self.policy.inference(obs, action_only=True) # relative cartesian pose xyz, quaternion wxyz
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
-                    # latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
-                
-                if gripper < 0.5:
-                    print(f'gripper is closing!!!!!')
                 gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
                 if self.verbose:
@@ -578,18 +612,18 @@ class ROS2LfdLeaderEgoasis:
                     target_pos=pos, 
                     target_quat=quat, 
                     target_gripper=gripper, 
-                    max_iter=10, 
-                    pos_err_threshold=0.01,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
+                    max_iter_time=1, 
+                    pos_err_threshold=0.02,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
                     rot_err_threshold=3,  # Relaxed from 2° to 5° for faster convergence
-                    gripper_err_threshold=0.05,
+                    gripper_err_threshold=0.1,
                     world_frame=False,
                     blocking=True,
                     )
                 
                 elapsed_time = time.time() - time_start
-                print(f'===================> action execution time: {elapsed_time:.3f}s')
-                sleep_time = max(0, 0.2 - elapsed_time) # sleep for 1/5s to maintain 5Hz loop rate
-                time.sleep(sleep_time)
+                # print(f'===================> action execution time: {elapsed_time:.3f}s')
+                # sleep_time = max(0, 1 - elapsed_time) # sleep for 1/5s to maintain 5Hz loop rate
+                # time.sleep(sleep_time)
 
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
