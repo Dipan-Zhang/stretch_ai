@@ -208,7 +208,7 @@ def load_visualization_data(data_path: str, idx: int, relative_motion: bool, dev
 
 
 
-def project_action_predictions(actions: np.ndarray, T_base_cam: np.ndarray, head_cam_K: np.ndarray, head_cam_img: np.ndarray):
+def project_action_predictions(actions: np.ndarray, T_base_cam: np.ndarray, head_cam_K: np.ndarray, head_cam_img: np.ndarray, cmap_name: str = "turbo"):
     """
     Project the actions (in base frame) to the head image
     Args:
@@ -226,7 +226,7 @@ def project_action_predictions(actions: np.ndarray, T_base_cam: np.ndarray, head
             head_cam_K.astype(np.float32), 
             T_base_cam)
 
-        img = visualize_projected_pixels(preds_pixels, head_cam_img)
+        img = visualize_projected_pixels(preds_pixels, head_cam_img, cmap_name=cmap_name)
         return img
     else:
         print("invalid actions shape, should be N, 9")
@@ -269,7 +269,7 @@ def get_heatmap(values, cmap_name="turbo", invert=False):
     return rgb
 
 
-def visualize_projected_pixels(preds_pixels: list, image: np.ndarray, ee_cam_pixels: list | None = None) -> np.ndarray:
+def visualize_projected_pixels(preds_pixels: list, image: np.ndarray, ee_cam_pixels: list | None = None, cmap_name: str = "turbo") -> np.ndarray:
     """
     Visualize projected pixels on the image using OpenCV.
     Args:
@@ -288,7 +288,7 @@ def visualize_projected_pixels(preds_pixels: list, image: np.ndarray, ee_cam_pix
     # ax.imshow(img)
 
     # alphas = np.linspace(1, 0.2, len(preds_pixels))
-    traj_colors = get_heatmap(np.arange(len(preds_pixels)), "turbo", invert=False)
+    traj_colors = get_heatmap(np.arange(len(preds_pixels))[None], cmap_name, invert=False)[0]
     for i, wp in enumerate(preds_pixels):
         wp_color = (traj_colors[i] * 255).astype(np.uint8)
         wp = np.floor(wp).astype(np.int32)

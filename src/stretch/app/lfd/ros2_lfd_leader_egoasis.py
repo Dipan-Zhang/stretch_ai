@@ -165,7 +165,7 @@ def process_vertical_image(orig_image: np.ndarray, target_height: int, target_wi
 
     return new_image_resized, new_intrinsic
     
-def prepare_state_abs(observation: dict, joint_states) -> np.ndarray:
+def process_robot_state(observation: dict, joint_states) -> np.ndarray:
     # return state in format (17,) T_world_gripper, gripper_closure
     state = np.zeros(17)
     ee_pose = observation.ee_pose
@@ -173,21 +173,23 @@ def prepare_state_abs(observation: dict, joint_states) -> np.ndarray:
     state[16] = joint_states['gripper']
     return state
 
-# def dict_value_torch2numpy(data_batch: dict) -> torch.Tensor:
-#     """
-#     convert all the values in the dictionary to numpy arrays
-#     Args:
-#         data_batch: dict, the data batch
-#     Returns:
-#         numpy array, the data batch
-#     """
-#     data_batch_np = {}
-#     for key, value in data_batch.items():
-#         if isinstance(value, torch.Tensor):
-#             if value.device != torch.device("cpu"):
-#                 value = value.cpu()
-#             data_batch_np[key] = value.numpy()
-#     return data_batch_np
+def dict_value_torch2numpy(data_batch: dict, exclude_keys: list = []) -> torch.Tensor:
+    """
+    convert all the values in the dictionary to numpy arrays
+    Args:
+        data_batch: dict, the data batch
+    Returns:
+        numpy array, the data batch
+    """
+    data_batch_np = {}
+    for key, value in data_batch.items():
+        if key in exclude_keys:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.device != torch.device("cpu"):
+                value = value.cpu()
+            data_batch_np[key] = value.numpy()
+    return data_batch_np
 
 class ROS2LfdLeaderEgoasis:
     def __init__(
@@ -281,7 +283,8 @@ class ROS2LfdLeaderEgoasis:
         pos_err_threshold: float = 0.01, 
         rot_err_threshold: float = 2,
         world_frame: bool = False,
-        # non_blocking: bool = False,
+        blocking: bool = True,
+        verbose: bool = False,
     ):
         """
         Go to the target pose using the robot's arm and gripper.
@@ -302,16 +305,16 @@ class ROS2LfdLeaderEgoasis:
             True if target reached (or command sent when non_blocking=False), False otherwise
         """
         # If non_blocking=False, just send the command and return
-        # if not non_blocking:
-        #     robot.arm_to_ee_pose(
-        #         pos = target_pos,
-        #         quat = target_quat,
-        #         gripper = target_gripper,
-        #         world_frame = world_frame,
-        #         reliable = True,
-        #         blocking = True,
-        #     )
-        #     return True
+        if not blocking:
+            self.robot.arm_to_ee_pose(
+                pos = target_pos,
+                quat = target_quat,
+                gripper = target_gripper,
+                world_frame = world_frame,
+                reliable = True,
+                blocking = False,
+            )
+            return True
         
         # Otherwise, loop and check if target is reached
         target_rot = R.from_quat(target_quat)
@@ -335,7 +338,8 @@ class ROS2LfdLeaderEgoasis:
             # Check if target is reached
             reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold)
             if reached:
-                print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
+                if verbose:
+                    print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, iterations={it+1}/{max_iter}")
                 return True
             
             # Move towards target
@@ -352,7 +356,8 @@ class ROS2LfdLeaderEgoasis:
         print(f"Failed to reach target after {max_iter} iterations: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°")
         return False
 
-    def prepare_observation(self, observation: dict) -> dict:
+    def prepare_observation(self) -> dict:
+        observation = self.robot.get_servo_observation()    
         # Label joint states with appropriate format
         joint_states = {
             k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
@@ -386,7 +391,7 @@ class ROS2LfdLeaderEgoasis:
         gripper_cam_K_resized[1, 2] *= scale_y
 
         # Acquire current gripper state
-        current_state = prepare_state_abs(observation, joint_states) # (17,) T_world_gripper, gripper_closure
+        current_state = process_robot_state(observation, joint_states) # (17,) T_world_gripper, gripper_closure
         obs = {
             "language_instruction": INSTRUCTION,  
             "observation.images.gripper": gripper_color_resized,  # (240, 320, 3)
@@ -423,6 +428,11 @@ class ROS2LfdLeaderEgoasis:
         head_image_for_vis = head_color_resized
         gripper_cam_for_vis = gripper_color_resized
 
+        closure = latest_action_chunk[0, 7]
+        if closure < 0.5:
+            cmap_name = "cool"
+        else:
+            cmap_name = "turbo"
         # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
         assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
         projected_img = vis_utils.project_action_predictions(
@@ -431,7 +441,8 @@ class ROS2LfdLeaderEgoasis:
             # action[None],
             T_base_head_cam.astype(np.float32),
             head_cam_K_resized.astype(np.float32),
-            head_image_for_vis
+            head_image_for_vis,
+            cmap_name=cmap_name
         ) # [320, 320]
         projected_img_gripper = vis_utils.project_action_predictions(
             # curr_state_vis[None], 
@@ -439,7 +450,8 @@ class ROS2LfdLeaderEgoasis:
             # action[None],
             T_base_ee_cam.astype(np.float32),
             gripper_cam_K_resized.astype(np.float32),
-            gripper_cam_for_vis
+            gripper_cam_for_vis,
+            cmap_name=cmap_name
         ) # [240, 320]
         projected_img_gripper = projected_img_gripper[:, 40:280]
 
@@ -471,31 +483,64 @@ class ROS2LfdLeaderEgoasis:
             blocking = True,
         )
 
-        start = input("Start mission: Y/N?")
+
+
+        # Warm up the policy
+        for i in range(10):
+            obs = self.prepare_observation()
+            with torch.inference_mode():
+                self.policy.inference(obs, action_only=True)
+        self.policy.reset()
+
+        # Print the total time taken for the warm up
+        start = input("Done warming up the policy. Start mission: Y/N?")
         if start.capitalize() != "Y":
             return
-
+            
         try:
             while True:
                 loop_timer.mark_start()
 
                 # Get observation
-                _obs = self.robot.get_servo_observation()
-                obs = self.prepare_observation(_obs)
+                time_start = time.time()
+                obs = self.prepare_observation()
+                # print(f'===================> data collection time: {time.time() - time_start:.3f}s')
 
                 # Send observation to polic
+                # time_start = time.time()
                 action = None
                 with torch.inference_mode():
                     outputs = self.policy.inference(obs, action_only=True) # relative cartesian pose xyz, quaternion wxyz
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                     # latest_action_chunk = outputs['latest_action_chunk'].cpu().numpy()
+                # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
                 gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
                 if self.verbose:
                     self.visualize_action(obs, outputs)
-                    loop_timer.mark_end()
-                    loop_timer.pretty_print()
+                    # loop_timer.mark_end()
+                    # loop_timer.pretty_print()
+                
+                # if not self._disable_recording:
+                #     # prepare obs and output dict
+                #     obs_dict_np = dict_value_torch2numpy(obs)
+                #     outputs_dict_np = dict_value_torch2numpy(outputs)
+                    
+                #     self._recorder.add(
+                #         ee_cam_pose=obs["ee_cam_pose"].copy(),
+                #         head_cam_pose=obs["head_cam_pose"].copy(),
+                #         ee_rgb=obs["observation.images.gripper"].copy(),
+                #         ee_depth=obs["observation.depths.gripper"].copy(),
+                #         xyz=np.array([0]),
+                #         quaternion=np.array([0]),
+                #         gripper=0,
+                #         ee_pose=np.array([0]),
+                #         observations=,
+                #         actions=action,
+                #         head_rgb=obs["observation.images.head"],
+                #         head_depth=obs["observation.depths.head"],
+                #     )
 
                 self.go_to_target_pose(
                     target_pos=pos, 
@@ -504,7 +549,14 @@ class ROS2LfdLeaderEgoasis:
                     max_iter=10, 
                     pos_err_threshold=0.01, 
                     rot_err_threshold=2, 
-                    world_frame=False)
+                    world_frame=False,
+                    blocking=True,
+                    )
+                
+                elapsed_time = time.time() - time_start
+                print(f'===================> action execution time: {elapsed_time:.3f}s')
+                sleep_time = max(0, 0.2 - elapsed_time) # sleep for 1/5s to maintain 5Hz loop rate
+                time.sleep(sleep_time)
 
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
@@ -583,7 +635,7 @@ if __name__ == "__main__":
         policy_kwargs={
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
-            "action_chunk_size": 15,
+            "action_chunk_size": 8,
             "policy_only": True,
             "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
             "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
