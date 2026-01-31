@@ -41,7 +41,7 @@ from policies.robot_policy_wrapper import PolicyVLAWorldModelWrapperStretchRobot
 import time 
 from termcolor import colored
 from scipy.spatial.transform import Rotation as R
-PROGRESS_TH=0.9
+PROGRESS_TH=0.95
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
 DEFAULT_FPS = 15
@@ -96,6 +96,30 @@ INSTRUCTION = "pick up bottle"
 ACTION_DIM = 20
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 320) # H,W
+
+def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
+    """
+    Use hybrid of time.sleep and spinning to minimize jitter.
+    Sleep dt - slack_time seconds first, then spin for the rest.
+    """
+    t_start = time_func()
+    if dt > slack_time:
+        time.sleep(dt - slack_time)
+    t_end = t_start + dt
+    while time_func() < t_end:
+        pass
+    return
+
+def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic):
+    t_start = time_func()
+    t_wait = t_end - t_start
+    if t_wait > 0:
+        t_sleep = t_wait - slack_time
+        if t_sleep > 0:
+            time.sleep(t_sleep)
+        while time_func() < t_end:
+            pass
+    return
 
 def process_vertical_image(orig_image: np.ndarray, target_height: int, target_width: int, intrinsic: np.ndarray = None, cut_mode: str = "top"):
     """
@@ -398,10 +422,10 @@ class ROS2LfdLeaderEgoasis:
         # get raw image
         gripper_color_image = observation.ee_rgb # RGB 
         gripper_depth_image = (
-            observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
+            observation.ee_depth.astype(np.float32) 
         )
         head_color_image = observation.rgb
-        head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
+        head_depth_image = observation.depth.astype(np.float32) 
         head_cam_K = observation.camera_K
         gripper_cam_K = observation.ee_camera_K
         gripper_cam_pose = observation.ee_camera_pose
@@ -439,7 +463,7 @@ class ROS2LfdLeaderEgoasis:
         return obs
     
 
-    def visualize_action(self, obs, outputs):
+    def visualize_action(self, obs, outputs, visualize_3d: bool = False):
         current_state = obs["observation.state"].copy()
         head_color_resized = obs["observation.images.head"].copy()
         gripper_color_resized = obs["observation.images.gripper"].copy()
@@ -459,40 +483,59 @@ class ROS2LfdLeaderEgoasis:
         curr_state_vis = curr_state_vis.astype(np.float32)
         head_image_for_vis = head_color_resized
         gripper_cam_for_vis = gripper_color_resized
-
         closure = latest_action_chunk[0, 7]
         if closure < 0.5:
             cmap_name = "turbo"
         else:
             cmap_name = "cool"
-        # print(f'latest_action_chunk shape: {latest_action_chunk.shape}')
-        assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
-        projected_img = vis_utils.project_action_predictions(
-            # curr_state_vis[None], 
-            latest_action_chunk,
-            # action[None],
-            T_base_head_cam.astype(np.float32),
-            head_cam_K_resized.astype(np.float32),
-            head_image_for_vis,
-            cmap_name=cmap_name
-        ) # [320, 320]
-        projected_img_gripper = vis_utils.project_action_predictions(
-            # curr_state_vis[None], 
-            latest_action_chunk,
-            # action[None],
-            T_base_ee_cam.astype(np.float32),
-            gripper_cam_K_resized.astype(np.float32),
-            gripper_cam_for_vis,
-            cmap_name=cmap_name
-        ) # [240, 320]
-        projected_img_gripper = projected_img_gripper[:, 40:280]
 
-        projected_img = cv2.resize(projected_img, (240, 240))
-        vis = np.concatenate([projected_img, projected_img_gripper], axis=1)
+        ######## DEBUG: Do 3D visualization ########
+        if visualize_3d:
+            points_3d, scene_ids = DatasetUtils.backproject(obs["observation.depths.head"], 
+                                                obs["HEAD_CAM_K"], 
+                                                obs["observation.depths.head"] < 1.5, 
+                                                NOCS_convention=False)
+            T_world_head_cam = obs["head_cam_pose"].copy()
+            points_world = DatasetUtils.transform_points(points_3d, T_world_head_cam)
+            points_colors = obs["observation.images.head"][scene_ids[0], scene_ids[1]] / 255.0
+            pcd = DatasetUtils.visualize_points(points_world, points_colors)
+            vis_action = DatasetUtils.visualize_3d_trajectory(
+                latest_action_chunk[:, :3],
+                size=0.01,
+                cmap_name=cmap_name,
+                to_mesh=True,
+                )
+            o3d.visualization.draw([pcd, vis_action])
+        ######## DEBUG: Do 3D visualization ########
+        else:
+            assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
+            projected_img = vis_utils.project_action_predictions(
+                # curr_state_vis[None], 
+                latest_action_chunk,
+                # action[None],
+                T_base_head_cam.astype(np.float32),
+                head_cam_K_resized.astype(np.float32),
+                head_image_for_vis,
+                cmap_name=cmap_name
+            ) # [320, 320]
+            projected_img_gripper = vis_utils.project_action_predictions(
+                # curr_state_vis[None], 
+                latest_action_chunk,
+                # action[None],
+                T_base_ee_cam.astype(np.float32),
+                gripper_cam_K_resized.astype(np.float32),
+                gripper_cam_for_vis,
+                cmap_name=cmap_name
+            ) # [240, 320]
+            projected_img_gripper = projected_img_gripper[:, 40:280]
 
-        # Ensure image in imshow is uint8 BGR. projected_img is RGB.
-        cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
-        cv2.waitKey(1)
+            projected_img = cv2.resize(projected_img, (240, 240))
+            vis = np.concatenate([projected_img, projected_img_gripper], axis=1)
+
+            # Ensure image in imshow is uint8 BGR. projected_img is RGB.
+            cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(1)
+
 
     def robot_standby(self):
         obs_init = self.robot.get_servo_observation()
@@ -572,15 +615,16 @@ class ROS2LfdLeaderEgoasis:
                 loop_timer.mark_start()
 
                 # Get observation
-                time_start = time.time()
+                time_inference_start = time.time()
                 obs = self.prepare_observation()
 
                 action = None
                 with torch.inference_mode():
-                    outputs = self.policy.inference(obs, action_only=True) # relative cartesian pose xyz, quaternion wxyz
+                    outputs = self.policy.inference(obs, action_only=True, align_to_current_state=True) # relative cartesian pose xyz, quaternion wxyz
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
+                gripper = 0.9 if gripper > 0.5 else 0.45
                 gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
                 if self.verbose:
@@ -612,18 +656,16 @@ class ROS2LfdLeaderEgoasis:
                     target_pos=pos, 
                     target_quat=quat, 
                     target_gripper=gripper, 
-                    max_iter_time=1, 
+                    max_iter_time=5, 
                     pos_err_threshold=0.02,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
                     rot_err_threshold=3,  # Relaxed from 2° to 5° for faster convergence
                     gripper_err_threshold=0.1,
                     world_frame=False,
                     blocking=True,
                     )
-                
-                elapsed_time = time.time() - time_start
-                # print(f'===================> action execution time: {elapsed_time:.3f}s')
-                # sleep_time = max(0, 1 - elapsed_time) # sleep for 1/5s to maintain 5Hz loop rate
-                # time.sleep(sleep_time)
+                elapsed_time = time.time() - time_inference_start
+                print(f'===================> action execution time: {elapsed_time:.3f}s')
+                precise_sleep(0.1 - elapsed_time) # sleep for 0.1s to maintain 10Hz loop rate
 
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
