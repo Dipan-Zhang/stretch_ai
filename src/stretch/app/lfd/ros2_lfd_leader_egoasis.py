@@ -187,13 +187,25 @@ def process_vertical_image(orig_image: np.ndarray, target_height: int, target_wi
         new_intrinsic = None
 
     return new_image_resized, new_intrinsic
-    
+
+def normalize_gripper(gripper: float) -> float:
+    # normalize gripper [Gripper_MIN, Gripper_MAX] to [0, 1]
+    gripper = np.clip(gripper, GRIPPER_MIN, GRIPPER_MAX)
+    return (gripper - GRIPPER_MIN) / (GRIPPER_MAX - GRIPPER_MIN)
+
+def unnormalize_gripper(gripper: float) -> float:
+    # revert normalized gripper [0, 1] to [Gripper_MIN, Gripper_MAX]
+    gripper = np.clip(gripper, 0, 1)
+    return GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
+
 def process_robot_state(observation: dict, joint_states) -> np.ndarray:
     # return state in format (17,) T_world_gripper, gripper_closure
     state = np.zeros(17)
     ee_pose = observation.ee_pose
+    gripper = joint_states['gripper']
+    gripper = normalize_gripper(gripper) # to [0, 1]
     state[:16] = ee_pose.reshape(-1)
-    state[16] = joint_states['gripper']
+    state[16] = gripper
     return state
 
 def dict_value_torch2numpy(data_batch: dict, exclude_keys: list = []) -> torch.Tensor:
@@ -624,8 +636,7 @@ class ROS2LfdLeaderEgoasis:
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
-                gripper = 0.9 if gripper > 0.5 else 0.45
-                gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
+                gripper = unnormalize_gripper(gripper)
 
                 if self.verbose:
                     self.visualize_action(obs, outputs)
