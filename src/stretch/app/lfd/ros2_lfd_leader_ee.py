@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import scipy.spatial.transform as tra
 
-from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel
+from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel # type: ignore
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
@@ -189,9 +189,6 @@ class ROS2LfdLeader:
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
         loop_timer = lt.LoopStats("lfd_leader_ee")
-        First = True
-        _t_debug = 0
-        
         # Visualization mode: test inference with ground truth data
         if self.visualize_trajectory:
             if self.visualization_data_path is None:
@@ -199,7 +196,6 @@ class ROS2LfdLeader:
 
             for idx in range (0, 200, 8):
                 vis_utils.visualize_trajectory(self.policy, self.relative_motion, self.visualization_data_path, idx)
-            breakpoint()
 
         # Go to initial pose
         obs_init = self.robot.get_servo_observation()
@@ -246,7 +242,6 @@ class ROS2LfdLeader:
                 head_depth_image = dobbe_format_rel.clip_and_normalize_depth(
                     head_depth_image, self.depth_filter_k
                 )
-
 
                 action = None
                 if self._run_policy:
@@ -299,11 +294,11 @@ class ROS2LfdLeader:
                         # This happens at the START of a new chunk, before applying the first action
                         # Following the pattern from test_actionchunk_rel2abs: when starting a chunk,
                         # we need the current absolute pose, then apply all actions in the chunk sequentially
-                        if (_t_debug) % 8 == 0:
-                            # Get current absolute pose from robot (this is the pose BEFORE applying the first action of the chunk)
-                            self.current_pose = observation.ee_pose.copy()
-                            print(f'idx {_t_debug}: current pose refreshed for new chunk!')
-                            print(f'  Current pose position: {self.current_pose[:3, 3]}')
+                        # if (_t_debug) % 8 == 0:
+                        #     # Get current absolute pose from robot (this is the pose BEFORE applying the first action of the chunk)
+                        #     self.current_pose = observation.ee_pose.copy()
+                        #     print(f'idx {_t_debug}: current pose refreshed for new chunk!')
+                        #     print(f'  Current pose position: {self.current_pose[:3, 3]}')
                         
                         # Build relative transformation matrix from action
                         T_rel = np.eye(4)
@@ -350,15 +345,7 @@ class ROS2LfdLeader:
 
                     gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
         
-                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]} idx{_t_debug}')
-                    # self.robot.arm_to_ee_pose(
-                    #     pos = pos,
-                    #     quat = quat, 
-                    #     gripper=gripper,  # gripper
-                    #     world_frame=False,
-                    #     reliable=True,
-                    #     blocking=True,
-                    # )
+                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
                     go_to_target_pose(
                         self.robot, 
                         pos, 
@@ -370,35 +357,16 @@ class ROS2LfdLeader:
                         world_frame=False,
                         non_blocking=False)
                         
-                    # breakpoint()
                     if action[8] >= PROGRESS_TH:
                         print('task succeed!')
                         break
                 else:
                     # If we aren't running the policy, what do we even need to do?
                     continue  # Skip the rest of the loop
-                _t_debug += 1
-                First=False
 
                 if self.verbose:
                     loop_timer.mark_end()
                     loop_timer.pretty_print()
-
-                # Stop condition for forced execution
-
-                stop = False
-                PROGRESS_STOP_THRESHOLD = 0.95
-                if len(action) == 9:
-                    stop = action[8] > PROGRESS_STOP_THRESHOLD
-
-                # if self._force and stop:
-                #     print(f"[LEADER] Stopping policy execution")
-                #     self._need_to_write = True
-
-                #     if self._disable_recording:
-                #         self._need_to_write = False
-                #         break
-
                 
         finally:
             # Go to initial pose
@@ -445,16 +413,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--robot_ip", type=str, default="", help="Robot IP address")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("-u", "--user-name", type=str, default="default_user")
-    parser.add_argument("-t", "--task-name", type=str, default="default_task")
-    parser.add_argument("-e", "--env-name", type=str, default="default_env")
-    parser.add_argument(
-        "-f", "--force", action="store_true", help="Force execute policy right away."
-    )
-    parser.add_argument("-d", "--data-dir", type=str, default="./data")
+    parser.add_argument("-l", "--logging_cfg", type=str, default="./src/stretch/app/lfd/logging.yaml")
     parser.add_argument(
         "-s", "--save-images", action="store_true", help="Save raw images in addition to videos"
     )
+    parser.add_argument("--policy_name", type=str, required=True)
     parser.add_argument("-P", "--send_port", type=int, default=4402, help="Port to send goals to.")
     parser.add_argument(
         "--teleop-mode",
@@ -467,7 +430,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--policy_path", type=str, required=True, help="Path to folder storing model weights"
     )
-    parser.add_argument("--policy_name", type=str, required=True)
 
     parser.add_argument("--run_visualization", action="store_true", help="Run visualization only.")
     parser.add_argument("--depth-filter-k", type=int, default=None)
