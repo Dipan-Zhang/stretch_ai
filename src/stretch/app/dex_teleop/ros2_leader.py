@@ -33,7 +33,8 @@ except ImportError as e:
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
-
+from stretch.app.lfd.policy_utils import normalize_gripper, unnormalize_gripper
+HOME_POS = np.array([-0.025, -0.35, 0.85])
 
 class ZmqRos2Leader:
     """Leader class for DexTeleop using the Zmq_client for ROS2 on Stretch"""
@@ -190,9 +191,9 @@ class ZmqRos2Leader:
         while True:
             logger.alert("Was the episode successful? (y/n)")
             key = cv2.waitKey(0)
-            if key == ord("y"):
+            if key == ord("y") or key == ord("Y"):
                 return True
-            elif key == ord("n"):
+            elif key == ord("n") or key == ord("N"):
                 return False
 
     def get_goal_joint_config(
@@ -266,8 +267,7 @@ class ZmqRos2Leader:
             #################################
 
             #################################
-            # INPUT: grip_width between 0.0 and 1.0
-
+            # INPUT: grip_width between 0.0 and 1.0, here unnormalized to [Gripper_MIN, Gripper_MAX]
             if (grip_width is not None) and (grip_width > -1000.0):
                 # Use width to interpolate between open and closed
                 new_goal_configuration["stretch_gripper"] = (
@@ -419,6 +419,9 @@ class ZmqRos2Leader:
 
         last_robot_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         offset_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        
+        self.robot.reset_manipulation_base_pose()
+        print('reset robot manip base pose!')
 
         try:
             while True:
@@ -430,20 +433,17 @@ class ZmqRos2Leader:
                 observation = self.robot.get_servo_observation()
 
                 # Process images
-                gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR)
-                gripper_depth_image = (
-                    observation.ee_depth.astype(np.float32) * observation.ee_depth_scaling
-                )
+                gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR) # BGR
+                gripper_depth_image = observation.ee_depth.astype(np.float32)
+
                 # print('gripper cam shape', gripper_color_image.shape)
-                gripper_cam_pose = observation.ee_camera_pose
-                gripper_cam_K = observation.ee_camera_K
+                # gripper_cam_pose = observation.ee_camera_pose
+                # gripper_cam_K = observation.ee_camera_K
 
                 head_color_image = cv2.cvtColor(observation.rgb, cv2.COLOR_RGB2BGR)
                 # print('head cam shape', head_color_image.shape)
                 # print('depth scaling', observation.depth_scaling)
-                head_depth_image = observation.depth.astype(np.float32) * observation.depth_scaling
-                head_cam_pose = observation.camera_pose
-                head_cam_K = observation.camera_K
+                head_depth_image = observation.depth.astype(np.float32) 
 
                 if display_received_images:
                     # change depth to be h x w x 3
@@ -470,7 +470,11 @@ class ZmqRos2Leader:
 
                     # Combine both images from ee and head
                     combined = np.vstack((combined, head_combined))
-                    cv2.imshow("Observed RGB/Depth Image", combined)
+                    downsample_ratio = 0.5
+                    current_width = combined.shape[1]
+                    current_height = combined.shape[0]
+                    combined_downsampled = cv2.resize(combined, (int(current_width * downsample_ratio), int(current_height * downsample_ratio)), interpolation=cv2.INTER_NEAREST)    
+                    cv2.imshow("Observed RGB/Depth Image", combined_downsampled)
 
                 # Wait for spacebar to be pressed and start/stop recording
                 # Spacebar is 32
@@ -479,6 +483,7 @@ class ZmqRos2Leader:
                 if key == 32:
                     self._recording = not self._recording
                     self.prev_goal_dict = None
+                    print('reset robot manip base pose!')
                     if self._recording:
                         # Reset base_x_origin
                         self.base_x_origin = None
@@ -581,7 +586,7 @@ class ZmqRos2Leader:
 
                         self.robot.arm_to(
                             robot_pose,
-                            gripper=goal_configuration["stretch_gripper"],
+                            gripper=goal_configuration["stretch_gripper"], # [Gripper_MIN, Gripper_MAX]
                             head=constants.look_at_ee,
                             blocking=False,  # We set this flag to False to make sure it doesn't block
                             reliable=False,  # We set this flag to False so we dont wait for receipt
@@ -591,10 +596,22 @@ class ZmqRos2Leader:
                         joint_states = {
                             k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
                         }
+                        gripper_state = joint_states['gripper']
+                        gripper_state_normalized = normalize_gripper(gripper_state) # to [0, 1]
+                        observation_dict = {
+                            "joint_states": joint_states,
+                            "ee_pose": observation.ee_pose.tolist(),
+                            "gripper": gripper_state_normalized.tolist()
+                        }
+                        action_dict = {
+                            "joint_goal_configuration": goal_configuration,
+                            "ee_goal_pose": goal_dict['absolute_gripper_pose'].tolist(),
+                            "gripper_goal": goal_dict["grip_width"].tolist(), # [0,1]
+                        }
                         if self._recording and self.prev_goal_dict is not None:
                             self._recorder.add(
-                                ee_rgb=gripper_color_image,
-                                ee_depth=gripper_depth_image,
+                                ee_rgb=observation.ee_rgb, # RGB
+                                ee_depth=observation.ee_depth, # meters
                                 ee_cam_pose=observation.ee_camera_pose,
                                 ee_cam_K=observation.ee_camera_K,
                                 xyz=goal_dict["relative_gripper_position"],
@@ -602,9 +619,9 @@ class ZmqRos2Leader:
                                 ee_goal_pose=goal_dict['absolute_gripper_pose'],
                                 gripper=goal_dict["grip_width"],
                                 ee_pose=observation.ee_pose,
-                                observations=joint_states,
-                                actions=goal_configuration,
-                                head_rgb=head_color_image,
+                                observations=observation_dict,  # put actual states: ee_pose, normalized gripper
+                                actions=action_dict, # goal joint configuration, goal pose, goal gripper
+                                head_rgb=observation.rgb, # RGB
                                 head_depth=head_depth_image,
                                 head_cam_pose=observation.camera_pose,
                                 head_cam_K=observation.camera_K,
@@ -637,17 +654,27 @@ class ZmqRos2Leader:
                     if self.record_success:
                         success = self.ask_for_success()
                         print("[LEADER] Writing data to disk with success = ", success)
-                        self.robot.reset_manipulation_base_pose()
+                        # self.robot.reset_manipulation_base_pose()
                         self._recorder.write(success=success)
                     else:
                         print("[LEADER] Writing data to disk.")
                         self._recorder.write()
-                        self.robot.reset_manipulation_base_pose()
+                        # self.robot.reset_manipulation_base_pose()
                     self._need_to_write = False
 
         finally:
             print("Exiting...")
-
+            # Go to initial pose
+            open = input("Open the gripper: Y/N?")
+            if open == "Y" or open == "y":
+                self.robot.arm_to_ee_pose(
+                    pos = HOME_POS,
+                    quat = None, 
+                    gripper = 1.0, 
+                    world_frame = False,
+                    reliable = True,
+                    blocking = True,
+                )
 
 if __name__ == "__main__":
     import argparse

@@ -216,7 +216,7 @@ class FileDataRecorder:
         rgb_dir.mkdir(exist_ok=True)
         depth_dir.mkdir(exist_ok=True)
 
-        cv2.imwrite(str(rgb_dir / f"{i:06}.png"), rgb)
+        cv2.imwrite(str(rgb_dir / f"{i:06}.png"), cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB))
         cv2.imwrite(str(depth_dir / f"{i:06}.png"), depth)
 
     def cleanup_image_folders(self, episode_dir):

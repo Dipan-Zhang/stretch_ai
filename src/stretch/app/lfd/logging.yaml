@@ -1,0 +1,5 @@
+data_dir: './data'
+user_name: 'default_user'
+task_name: 'default_task'
+env_name: 'default_env'
+save_images: true

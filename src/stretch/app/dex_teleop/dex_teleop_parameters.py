@@ -241,7 +241,7 @@ teleop_origin = np.array([teleop_origin_x, teleop_origin_y, teleop_origin_z])
 SUPPORTED_MODES = ["standard", "rotary_base", "stationary_base", "base_x", "old_stationary_base"]
 
 # Scaling factor for arm from IK to ros2 backend
-ros2_arm_scaling_factor = 3.8
+ros2_arm_scaling_factor = 5
 
 # Dex teleop controlled joints
 DEX_TELEOP_CONTROLLED_JOINTS = [
