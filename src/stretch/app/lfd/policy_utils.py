@@ -150,7 +150,8 @@ def prepare_state_abs(observation: dict, joint_states, device: str = "cuda") -> 
     return state
 
 def prepare_image(image, device):
-
+    # :param image: (H, W, 3) in [0, 255]
+    # output: (1, 3, 320, 320) in [0, 1]
     transforms = v2.Compose([v2.CenterCrop(320)])
     image = torch.from_numpy(image)
     image = image.to(torch.float32) / 255
