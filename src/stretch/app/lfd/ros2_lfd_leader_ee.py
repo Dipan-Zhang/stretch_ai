@@ -91,6 +91,11 @@ class ROS2LfdLeader:
         )
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
+        if policy_name == "dummy":
+            self.policy.set_parameters(param_dict={
+                "chunk_size": 8,
+                "action_type": "real" # real or fake
+            })
         self.relative_motion = relative_motion
         self._run_policy = run_policy
         self.visualize_trajectory = not self._run_policy
