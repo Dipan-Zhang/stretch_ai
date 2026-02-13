@@ -230,3 +230,13 @@ def prepare_action_dict(
         action_dict["stretch_gripper"] = raw_actions[8]
 
     return action_dict
+
+def normalize_gripper(gripper: float) -> float:
+    # normalize gripper [Gripper_MIN, Gripper_MAX] to [0, 1]
+    gripper = np.clip(gripper, GRIPPER_MIN, GRIPPER_MAX)
+    return (gripper - GRIPPER_MIN) / (GRIPPER_MAX - GRIPPER_MIN)
+
+def unnormalize_gripper(gripper: float) -> float:
+    # revert normalized gripper [0, 1] to [Gripper_MIN, Gripper_MAX]
+    gripper = np.clip(gripper, 0, 1)
+    return GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
