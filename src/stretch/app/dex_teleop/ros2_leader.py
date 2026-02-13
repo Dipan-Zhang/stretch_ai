@@ -57,6 +57,7 @@ class ZmqRos2Leader:
         use_clutch: bool = False,
         teach_grasping: bool = False,
         teleop_factor: float = 0.5,
+        perf_debug: bool = False,
     ):
         self.robot = robot
         self.camera = None
@@ -72,6 +73,7 @@ class ZmqRos2Leader:
         self.use_clutch = use_clutch
         self.teach_grasping = teach_grasping
         self.teleop_factor = teleop_factor
+        self.perf_debug = perf_debug
 
         self.left_handed = left_handed
 
@@ -410,12 +412,19 @@ class ZmqRos2Leader:
         print("Press ESC to exit.")
 
         # loop stuff for clutch
+        last_recorded_obs_id = None
         clutched = False
         clutch_debounce_threshold = 3
         change_clutch_count = 0
         check_hand_frame_skip = 3
         i = 0
         max_i = 100  # arbitrary number of iterations
+        if self.perf_debug:
+            perf_last_print = time.perf_counter()
+            perf_loop_count = 0
+            perf_new_obs_count = 0
+            perf_last_obs_id = None
+            perf_last_servo_seq = None
 
         last_robot_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         offset_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -430,7 +439,15 @@ class ZmqRos2Leader:
                 loop_timer.mark_start()
 
                 # Get observation
-                observation = self.robot.get_servo_observation()
+                if self.perf_debug:
+                    perf_loop_count += 1
+                    observation = self.robot.get_servo_observation()
+                    obs_id = id(observation)
+                    if perf_last_obs_id is None or obs_id != perf_last_obs_id:
+                        perf_new_obs_count += 1
+                        perf_last_obs_id = obs_id
+                else:
+                    observation = self.robot.get_servo_observation()
 
                 # Process images
                 gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR) # BGR
@@ -476,6 +493,32 @@ class ZmqRos2Leader:
                     combined_downsampled = cv2.resize(combined, (int(current_width * downsample_ratio), int(current_height * downsample_ratio)), interpolation=cv2.INTER_NEAREST)    
                     cv2.imshow("Observed RGB/Depth Image", combined_downsampled)
 
+                if self.perf_debug:
+                    now = time.perf_counter()
+                    dt = now - perf_last_print
+                    if dt >= 2.0:
+                        loop_rate = perf_loop_count / dt
+                        new_obs_rate = perf_new_obs_count / dt
+                        servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
+                        if perf_last_servo_seq is None:
+                            servo_rate = None
+                        else:
+                            servo_rate = (servo_seq - perf_last_servo_seq) / dt
+                        perf_last_servo_seq = servo_seq
+                        servo_age_ms = None if servo_age is None else servo_age * 1000.0
+                        servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
+                        if servo_rate is None:
+                            print(
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
+                            )
+                        else:
+                            print(
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
+                            )
+                        perf_last_print = now
+                        perf_loop_count = 0
+                        perf_new_obs_count = 0
+
                 # Wait for spacebar to be pressed and start/stop recording
                 # Spacebar is 32
                 # Escape is 27
@@ -520,7 +563,7 @@ class ZmqRos2Leader:
                 markers, color_image = self.webcam_aruco_detector.process_next_frame()
                 if color_image is None:
                     "Waiting for webcam images!"
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     continue
 
                 # Set up commands to be sent to the robot
@@ -593,39 +636,43 @@ class ZmqRos2Leader:
                         )
 
                         # Prep joint states as dict
-                        joint_states = {
-                            k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
-                        }
-                        gripper_state = joint_states['gripper']
-                        gripper_state_normalized = normalize_gripper(gripper_state) # to [0, 1]
-                        observation_dict = {
-                            "joint_states": joint_states,
-                            "ee_pose": observation.ee_pose.tolist(),
-                            "gripper": gripper_state_normalized.tolist()
-                        }
-                        action_dict = {
-                            "joint_goal_configuration": goal_configuration,
-                            "ee_goal_pose": goal_dict['absolute_gripper_pose'].tolist(),
-                            "gripper_goal": goal_dict["grip_width"].tolist(), # [0,1]
-                        }
                         if self._recording and self.prev_goal_dict is not None:
-                            self._recorder.add(
-                                ee_rgb=observation.ee_rgb, # RGB
-                                ee_depth=observation.ee_depth, # meters
-                                ee_cam_pose=observation.ee_camera_pose,
-                                ee_cam_K=observation.ee_camera_K,
-                                xyz=goal_dict["relative_gripper_position"],
-                                quaternion=goal_dict["relative_gripper_orientation"],
-                                ee_goal_pose=goal_dict['absolute_gripper_pose'],
-                                gripper=goal_dict["grip_width"],
-                                ee_pose=observation.ee_pose,
-                                observations=observation_dict,  # put actual states: ee_pose, normalized gripper
-                                actions=action_dict, # goal joint configuration, goal pose, goal gripper
-                                head_rgb=observation.rgb, # RGB
-                                head_depth=head_depth_image,
-                                head_cam_pose=observation.camera_pose,
-                                head_cam_K=observation.camera_K,
-                            )
+                            current_obs_id = id(observation)
+                            if current_obs_id != last_recorded_obs_id:
+                                joint_states = {
+                                    k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
+                                }
+                                gripper_state = joint_states['gripper']
+                                gripper_state_normalized = normalize_gripper(gripper_state) # to [0, 1]
+                                observation_dict = {
+                                    "joint_states": joint_states,
+                                    "ee_pose": observation.ee_pose.tolist(),
+                                    "gripper": gripper_state_normalized.tolist()
+                                }
+                                action_dict = {
+                                    "joint_goal_configuration": goal_configuration,
+                                    "ee_goal_pose": goal_dict['absolute_gripper_pose'].tolist(),
+                                    "gripper_goal": goal_dict["grip_width"].tolist(), # [0,1]
+                                }
+                                # Only record if the observation object is different from the last one we saved
+                                self._recorder.add(
+                                    ee_rgb=observation.ee_rgb, # RGB
+                                    ee_depth=observation.ee_depth, # meters
+                                    ee_cam_pose=observation.ee_camera_pose,
+                                    ee_cam_K=observation.ee_camera_K,
+                                    xyz=goal_dict["relative_gripper_position"],
+                                    quaternion=goal_dict["relative_gripper_orientation"],
+                                    ee_goal_pose=goal_dict['absolute_gripper_pose'],
+                                    gripper=goal_dict["grip_width"],
+                                    ee_pose=observation.ee_pose,
+                                    observations=observation_dict,  # put actual states: ee_pose, normalized gripper
+                                    actions=action_dict, # goal joint configuration, goal pose, goal gripper
+                                    head_rgb=observation.rgb, # RGB
+                                    head_depth=head_depth_image,
+                                    head_cam_pose=observation.camera_pose,
+                                    head_cam_K=observation.camera_K,
+                                )
+                                last_recorded_obs_id = current_obs_id
 
                             # Record waypoint
                             if waypoint_key is not None:
@@ -708,6 +755,7 @@ if __name__ == "__main__":
     parser.add_argument("--platform", type=str, default="linux", choices=["linux", "not_linux"])
     parser.add_argument("-c", "--clutch", action="store_true")
     parser.add_argument("--teach-grasping", action="store_true")
+    parser.add_argument("--perf_debug", action="store_true", help="Print loop/servo rates.")
     args = parser.parse_args()
 
     # Parameters
@@ -739,6 +787,7 @@ if __name__ == "__main__":
         platform=args.platform,
         use_clutch=args.clutch,
         teach_grasping=args.teach_grasping,
+        perf_debug=args.perf_debug,
     )
 
     try:
