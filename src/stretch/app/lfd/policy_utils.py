@@ -13,11 +13,14 @@ from lerobot.common.policies.act.modeling_act import ACTPolicy
 from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
 from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
+from lerobot.common.policies.dummy_policy import DummyPolicy
 from torchvision.transforms import v2
 import scipy.spatial.transform as tra
+import cv2
 
 SUPPORTED_POLICIES = ["act", "diffusion", "diffusion_depth", "vqbet"]
-
+GRIPPER_MIN=-0.3
+GRIPPER_MAX=0.6
 
 def load_policy(
     policy_name: str | None = None, policy_path: str | None = None, device: str | None = "cuda"
@@ -32,6 +35,8 @@ def load_policy(
         policy = DPdepth.from_pretrained(policy_path)
     elif policy_name == "vqbet":
         policy = VQBeTPolicy.from_pretrained(policy_path)
+    elif policy_name == "dummy":
+        policy = DummyPolicy(policy_path)
     else:
         raise NotImplementedError(
             f"{policy_name} is not a supported policy. Supported policies: {SUPPORTED_POLICIES}"
