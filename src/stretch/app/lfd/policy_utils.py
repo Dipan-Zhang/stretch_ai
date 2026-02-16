@@ -109,7 +109,7 @@ def prepare_state_rel(observation: dict, joint_states, device: str = "cuda") -> 
     ee_cam_pose = observation.ee_camera_pose
     ee_cam_pos = ee_cam_pose[:3, 3]
     ee_cam_quat = tra.Rotation.from_matrix(ee_cam_pose[:3, :3]).as_quat()
-    gripper = joint_states['gripper']
+    gripper = normalize_gripper(joint_states['gripper'])
     # breakpoint()
     state =  [
         ee_cam_pos[0],
@@ -134,8 +134,8 @@ def prepare_state_abs(observation: dict, joint_states, device: str = "cuda") -> 
     ee_pose = observation.ee_pose
     ee_pos = ee_pose[:3, 3]
     ee_quat = tra.Rotation.from_matrix(ee_pose[:3, :3]).as_quat()
-    gripper = joint_states['gripper']
-    # breakpoint()
+    gripper = normalize_gripper(joint_states['gripper'])
+
     state =  [
         ee_pos[0],
         ee_pos[1],
