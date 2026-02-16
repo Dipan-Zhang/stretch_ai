@@ -241,7 +241,7 @@ teleop_origin = np.array([teleop_origin_x, teleop_origin_y, teleop_origin_z])
 SUPPORTED_MODES = ["standard", "rotary_base", "stationary_base", "base_x", "old_stationary_base"]
 
 # Scaling factor for arm from IK to ros2 backend
-ros2_arm_scaling_factor = 5
+ros2_arm_scaling_factor = 3.8
 
 # Dex teleop controlled joints
 DEX_TELEOP_CONTROLLED_JOINTS = [
@@ -249,6 +249,9 @@ DEX_TELEOP_CONTROLLED_JOINTS = [
     "base_y_joint",
     "base_theta_joint",
     "joint_arm_l0",
+    # "joint_arm_l1",
+    # "joint_arm_l2",
+    # "joint_arm_l3",
     "joint_lift",
     "joint_wrist_roll",
     "joint_wrist_pitch",
@@ -278,6 +281,9 @@ def get_center_configuration(lift_middle):
         "joint_mobile_base_rotation": 0.0,
         "joint_lift": lift_middle,
         "joint_arm_l0": 0.01,
+        # "joint_arm_l1": 0.01,
+        # "joint_arm_l2": 0.01,
+        # "joint_arm_l3": 0.01,
         "joint_wrist_yaw": 0.0,
         "joint_wrist_pitch": 0.0,
         "joint_wrist_roll": 0.0,
@@ -295,6 +301,9 @@ def get_starting_configuration(lift_middle):
         "joint_mobile_base_rotate_by": 0.0,
         "joint_lift": lift_middle,
         "joint_arm_l0": 0.01,
+        # "joint_arm_l1": 0.01,
+        # "joint_arm_l2": 0.01,
+        # "joint_arm_l3": 0.01,
         "joint_wrist_yaw": 0.0,
         "joint_wrist_pitch": 0.0,
         "joint_wrist_roll": 0.0,

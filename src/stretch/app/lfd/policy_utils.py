@@ -13,11 +13,14 @@ from lerobot.common.policies.act.modeling_act import ACTPolicy
 from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
 from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
+from lerobot.common.policies.dummy_policy import DummyPolicy
 from torchvision.transforms import v2
 import scipy.spatial.transform as tra
+import cv2
 
 SUPPORTED_POLICIES = ["act", "diffusion", "diffusion_depth", "vqbet"]
-
+GRIPPER_MIN=-0.3
+GRIPPER_MAX=0.6
 
 def load_policy(
     policy_name: str | None = None, policy_path: str | None = None, device: str | None = "cuda"
@@ -32,6 +35,8 @@ def load_policy(
         policy = DPdepth.from_pretrained(policy_path)
     elif policy_name == "vqbet":
         policy = VQBeTPolicy.from_pretrained(policy_path)
+    elif policy_name == "dummy":
+        policy = DummyPolicy(policy_path)
     else:
         raise NotImplementedError(
             f"{policy_name} is not a supported policy. Supported policies: {SUPPORTED_POLICIES}"
@@ -104,7 +109,7 @@ def prepare_state_rel(observation: dict, joint_states, device: str = "cuda") -> 
     ee_cam_pose = observation.ee_camera_pose
     ee_cam_pos = ee_cam_pose[:3, 3]
     ee_cam_quat = tra.Rotation.from_matrix(ee_cam_pose[:3, :3]).as_quat()
-    gripper = joint_states['gripper']
+    gripper = normalize_gripper(joint_states['gripper'])
     # breakpoint()
     state =  [
         ee_cam_pos[0],
@@ -129,8 +134,8 @@ def prepare_state_abs(observation: dict, joint_states, device: str = "cuda") -> 
     ee_pose = observation.ee_pose
     ee_pos = ee_pose[:3, 3]
     ee_quat = tra.Rotation.from_matrix(ee_pose[:3, :3]).as_quat()
-    gripper = joint_states['gripper']
-    # breakpoint()
+    gripper = normalize_gripper(joint_states['gripper'])
+
     state =  [
         ee_pos[0],
         ee_pos[1],
@@ -226,3 +231,13 @@ def prepare_action_dict(
         action_dict["stretch_gripper"] = raw_actions[8]
 
     return action_dict
+
+def normalize_gripper(gripper: float) -> float:
+    # normalize gripper [Gripper_MIN, Gripper_MAX] to [0, 1]
+    gripper = np.clip(gripper, GRIPPER_MIN, GRIPPER_MAX)
+    return (gripper - GRIPPER_MIN) / (GRIPPER_MAX - GRIPPER_MIN)
+
+def unnormalize_gripper(gripper: float) -> float:
+    # revert normalized gripper [0, 1] to [Gripper_MIN, Gripper_MAX]
+    gripper = np.clip(gripper, 0, 1)
+    return GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper

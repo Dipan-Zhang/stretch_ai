@@ -844,6 +844,8 @@ class HomeRobotZmqClient(AbstractRobotClient):
         self._pose_graph = None
         self._state = None  # Low level state includes joint angles and base XYT
         self._servo = None  # Visual servoing state includes smaller images
+        self._servo_seq = 0
+        self._servo_last_time = None
         self._thread = None
         self._state_thread = None
         self._finish = False
@@ -1626,22 +1628,43 @@ class HomeRobotZmqClient(AbstractRobotClient):
         if message is None or self._state is None:
             return
 
+        # Track decompression times if verbose
+        decompress_times = {}
+        
         # color_image = compression.from_webp(message["ee_cam/color_image"])
         if "ee_cam/color_image" in message:
+            t_start = timeit.default_timer()
             color_image = compression.from_jpg(message["ee_cam/color_image"])
+            decompress_times["ee_rgb"] = timeit.default_timer() - t_start
+            
+            t_start = timeit.default_timer()
             depth_image = compression.from_jp2(message["ee_cam/depth_image"])
+            decompress_times["ee_depth"] = timeit.default_timer() - t_start
             depth_image = depth_image / 1000
+            # depth_image = np.zeros(color_image.shape[:2])
         else:
             color_image = None
             depth_image = None
             image_scaling = None
 
         # Get head information from the message as well
+        t_start = timeit.default_timer()
         head_color_image = compression.from_jpg(message["head_cam/color_image"])
-        head_depth_image = compression.from_jp2(message["head_cam/depth_image"]) / 1000
+        decompress_times["head_rgb"] = timeit.default_timer() - t_start
+        
+        t_start = timeit.default_timer()
+        head_depth_image = compression.from_jp2(message["head_cam/depth_image"])
+        decompress_times["head_depth"] = timeit.default_timer() - t_start
+        head_depth_image = head_depth_image / 1000
+        # # head_depth_image = None
+        # head_depth_image = np.zeros(head_color_image.shape[:2])
+        
         head_image_scaling = message["head_cam/image_scaling"]
         joint = message["robot/config"]
-        with self._servo_lock and self._state_lock:
+        
+        t_lock_start = timeit.default_timer()
+        with self._servo_lock, self._state_lock:
+            t_obs_create_start = timeit.default_timer()
             observation = Observations(
                 gps=self._state["base_pose"][:2],
                 compass=self._state["base_pose"][2],
@@ -1670,6 +1693,24 @@ class HomeRobotZmqClient(AbstractRobotClient):
             else:
                 observation.is_simulation = False
             self._servo = observation
+            self._servo_seq += 1
+            self._servo_last_time = time.time()
+            t_obs_create_end = timeit.default_timer()
+        
+        t_lock_end = timeit.default_timer()
+        decompress_times["lock"] = t_lock_end - t_lock_start
+        decompress_times["obs_create"] = t_obs_create_end - t_obs_create_start
+        
+        # Print detailed timing if debug flag is set (only occasionally to avoid spam)
+        if self._servo_seq % 200 == 0:
+            total_decompress = sum(v for k, v in decompress_times.items() if k not in ["lock", "obs_create"])
+            print(f"[SERVO DECOMPRESS] EE RGB={decompress_times.get('ee_rgb', 0)*1000:.2f}ms "
+                  f"EE Depth={decompress_times.get('ee_depth', 0)*1000:.2f}ms "
+                  f"Head RGB={decompress_times.get('head_rgb', 0)*1000:.2f}ms "
+                  f"Head Depth={decompress_times.get('head_depth', 0)*1000:.2f}ms "
+                  f"Total Decompress={total_decompress*1000:.2f}ms "
+                  f"Lock={decompress_times.get('lock', 0)*1000:.2f}ms "
+                  f"Obs Create={decompress_times.get('obs_create', 0)*1000:.2f}ms")
 
     def get_servo_observation(self):
         """Get the current servo observation.
@@ -1679,6 +1720,16 @@ class HomeRobotZmqClient(AbstractRobotClient):
         """
         with self._servo_lock:
             return self._servo
+
+    def get_servo_stats(self) -> Tuple[int, Optional[float], Optional[float]]:
+        """Return (seq, last_time, age_sec)."""
+        with self._servo_lock:
+            last_time = self._servo_last_time
+            if last_time is None:
+                age = None
+            else:
+                age = time.time() - last_time
+            return self._servo_seq, last_time, age
 
     def blocking_spin_servo(self, verbose: bool = False):
         """Listen for servo messages coming from the robot, i.e. low res images for ML state. This is intended to be run in a separate thread.

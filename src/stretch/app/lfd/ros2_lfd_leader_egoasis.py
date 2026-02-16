@@ -32,6 +32,7 @@ import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
 from easydict import EasyDict as edict 
+from stretch.app.lfd.infer_utils import process_vertical_image
 # policy HACK
 sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
 import utils.dataset_utils as DatasetUtils # type: ignore
@@ -92,10 +93,11 @@ KEYS_FOR_STREAMING = [
 # INSTRUCTION = "carry laptop"
 # INSTRUCTION = "pick up laptop"
 # INSTRUCTION = "open laptop"  # "open laptop"
-INSTRUCTION = "pick up bottle"
+INSTRUCTION = "pick up pot and place in box"
 ACTION_DIM = 20
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 320) # H,W
+HOME_POS = np.array([-0.025, -0.35, 0.85])
 
 def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
     """
@@ -121,72 +123,6 @@ def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic
             pass
     return
 
-def process_vertical_image(orig_image: np.ndarray, target_height: int, target_width: int, intrinsic: np.ndarray = None, cut_mode: str = "top"):
-    """
-    process the vertical image and return the new image and intrinsic matrix
-    Args:
-        orig_image: np.ndarray, the original image
-        target_height: int, the target height of the cropped image
-        target_width: int, the target width of the cropped image
-        intrinsic: np.ndarray, the intrinsic matrix of the camera
-        cut_mode: str, the mode to crop the image
-    Returns:
-        new_image: np.ndarray, the new image
-        new_intrinsic: np.ndarray, the new intrinsic matrix
-    """
-    if orig_image.ndim == 2:
-        DEPTH_MODE=True
-    else:
-        DEPTH_MODE=False
-    orig_height, orig_width = orig_image.shape[0], orig_image.shape[1]
-    assert orig_height > orig_width, "Original height must be greater than width"
-    
-
-    # 1. Determine Crop Offset
-    cropped_height = orig_width
-    padding = (orig_height - cropped_height) // 2
-    if cut_mode == "bottom":
-        y_offset = 2 * padding
-    elif cut_mode == "center":
-        y_offset = padding
-    elif cut_mode == "top":
-        y_offset = 0
-    else:
-        raise NotImplementedError
-    
-    # apply resize 
-    if DEPTH_MODE:
-        new_image = np.zeros((orig_width, orig_width), dtype=np.float32)
-        new_image = orig_image[y_offset : y_offset + orig_width, 0 : orig_width]
-        new_image_resized = cv2.resize(new_image, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
-    else:
-        new_image = np.zeros((orig_width, orig_width, 3), dtype=np.uint8)
-        new_image = orig_image[y_offset : y_offset + orig_width, 0 : orig_width, :]
-        new_image_resized = cv2.resize(new_image, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
-
-        
-    # 2. Update Intrinsic for Crop
-    if intrinsic is not None:
-        new_intrinsic = intrinsic.copy()
-        # Shift principal point by the crop offset
-        # cx remains same because x_offset is 0
-        new_intrinsic[1, 2] = intrinsic[1, 2] - y_offset 
-        
-        # 3. Handle Resize
-        # Note: new_image currently has shape (target_height, orig_width)
-        # We are resizing it to (target_width, target_height)
-        scale_x = target_width / orig_width
-        scale_y = target_height / cropped_height # This is 1.0 in your current logic!
-        
-        # Apply scaling to the whole matrix (fx, fy, cx, cy)
-        new_intrinsic[0, 0] *= scale_x
-        new_intrinsic[0, 2] *= scale_x
-        new_intrinsic[1, 1] *= scale_y
-        new_intrinsic[1, 2] *= scale_y
-    else:
-        new_intrinsic = None
-
-    return new_image_resized, new_intrinsic
 
 def normalize_gripper(gripper: float) -> float:
     # normalize gripper [Gripper_MIN, Gripper_MAX] to [0, 1]
@@ -244,8 +180,8 @@ class ROS2LfdLeaderEgoasis:
             "cfg": None,
             "weight_ckpt": None,
             "action_chunk_size": 8,
-            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
-            "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
+            # "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
+            # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
             "policy_only": True,
             "device": "cuda",
         },
@@ -503,6 +439,13 @@ class ROS2LfdLeaderEgoasis:
 
         ######## DEBUG: Do 3D visualization ########
         if visualize_3d:
+            pred_action_latest = outputs["latest_predicted_action"].cpu().numpy().copy()
+            history_action_abs = obs["history_action_abs"][0].cpu().numpy().copy() # [H, D]
+            start_pos_world = obs["start_pos_world"][0].cpu().numpy().copy()[None] # [1, D]
+            assert history_action_abs.shape[1] == 20
+            history_action_right = history_action_abs[:, 10:]
+
+            
             points_3d, scene_ids = DatasetUtils.backproject(obs["observation.depths.head"], 
                                                 obs["HEAD_CAM_K"], 
                                                 obs["observation.depths.head"] < 1.5, 
@@ -511,13 +454,28 @@ class ROS2LfdLeaderEgoasis:
             points_world = DatasetUtils.transform_points(points_3d, T_world_head_cam)
             points_colors = obs["observation.images.head"][scene_ids[0], scene_ids[1]] / 255.0
             pcd = DatasetUtils.visualize_points(points_world, points_colors)
-            vis_action = DatasetUtils.visualize_3d_trajectory(
-                latest_action_chunk[:, :3],
+
+            root_action_history = DatasetUtils.get_root_transformation(history_action_right)
+            tra_action_latest = pred_action_latest[:, :3] # [H, 3]
+            quat_action_latest = pred_action_latest[:, 3:7] # [H, 4]
+            rot_action_latest = R.from_quat(quat_action_latest).as_matrix() # [H, 3, 3]
+            root_action_latest = np.eye(4)[None].repeat(tra_action_latest.shape[0], axis=0)
+            root_action_latest[:, :3, 3] = tra_action_latest
+            root_action_latest[:, :3, :3] = rot_action_latest
+            curr_pos_world = DatasetUtils.visualize_sphere_o3d(start_pos_world[0, :3], [0, 1, 0], size=0.02)
+            vis_action_latest = DatasetUtils.visualize_6d_trajectory(
+                root_action_latest,
                 size=0.01,
                 cmap_name=cmap_name,
                 to_mesh=True,
+            )
+            vis_action_history = DatasetUtils.visualize_6d_trajectory(
+                root_action_history,
+                size=0.01,
+                cmap_name="hot",
+                to_mesh=True,
                 )
-            o3d.visualization.draw([pcd, vis_action])
+            o3d.visualization.draw([pcd, vis_action_latest, vis_action_history, curr_pos_world])
         ######## DEBUG: Do 3D visualization ########
         else:
             assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
@@ -632,14 +590,19 @@ class ROS2LfdLeaderEgoasis:
 
                 action = None
                 with torch.inference_mode():
-                    outputs = self.policy.inference(obs, action_only=True, align_to_current_state=True) # relative cartesian pose xyz, quaternion wxyz
+                    outputs = self.policy.inference(obs, action_only=True, align_to_current_state=False) # relative cartesian pose xyz, quaternion wxyz
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
+
+                history_gripper = obs["observation.state"][16]
+                action_chunk_gripper = outputs["latest_action_chunk"][:, 7].cpu().numpy().copy().astype(np.float32)
+                print(f"===================> {history_gripper:.3f}=, {gripper:.3f}=, {action_chunk_gripper}= ")
+                # breakpoint()
                 gripper = unnormalize_gripper(gripper)
 
                 if self.verbose:
-                    self.visualize_action(obs, outputs)
+                    self.visualize_action(obs, outputs, visualize_3d=False)
                     # loop_timer.mark_end()
                     # loop_timer.pretty_print()
                 
@@ -667,15 +630,15 @@ class ROS2LfdLeaderEgoasis:
                     target_pos=pos, 
                     target_quat=quat, 
                     target_gripper=gripper, 
-                    max_iter_time=5, 
-                    pos_err_threshold=0.02,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
+                    max_iter_time=10, 
+                    pos_err_threshold=0.01,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
                     rot_err_threshold=3,  # Relaxed from 2° to 5° for faster convergence
                     gripper_err_threshold=0.1,
                     world_frame=False,
                     blocking=True,
                     )
                 elapsed_time = time.time() - time_inference_start
-                print(f'===================> action execution time: {elapsed_time:.3f}s')
+                # print(f'===================> action execution time: {elapsed_time:.3f}s')
                 precise_sleep(0.1 - elapsed_time) # sleep for 0.1s to maintain 10Hz loop rate
 
                 if progress >= PROGRESS_TH:
@@ -684,24 +647,23 @@ class ROS2LfdLeaderEgoasis:
 
         finally:
             # Go to initial pose
-            input("Open the gripper: Y/N?")
+            input("Go to home pose: Y/N?")
             obs = self.robot.get_servo_observation()
-            curr_pos = obs.ee_pose[:3, 3]
-            curr_quat = R.from_matrix(obs.ee_pose[:3, :3]).as_quat()
             self.robot.arm_to_ee_pose(
-                pos = curr_pos,
-                quat = curr_quat, 
+                pos = HOME_POS,
+                quat = None, 
                 gripper = 1.0, 
                 world_frame = False,
                 reliable = True,
                 blocking = True,
             )
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy_cfg", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_pickup_bottle/config.yaml")
-    parser.add_argument("--ckpt", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_pickup_bottle/iter30000.ckpt")
-    parser.add_argument("-i", "--robot_ip", type=str, default="", help="Robot IP address")
+    parser.add_argument("--policy_cfg", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_noprogress/config.yaml")
+    parser.add_argument("--ckpt", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_noprogress/iter25000.ckpt")
+    parser.add_argument("-i", "--robot_ip", type=str, default="192.168.1.10", help="Robot IP address")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-l", "--logging_cfg", type=str, default="./src/stretch/app/lfd/logging.yaml")
     parser.add_argument(
@@ -755,10 +717,11 @@ if __name__ == "__main__":
         policy_kwargs={
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
-            "action_chunk_size": 8,
+            "action_chunk_size": 12,
             "policy_only": True,
-            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
-            "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pick-and-place_relaction_meta.npz",
+            "state_meta_fpath": None,
+            # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
             "device": args.device,
         },
         relative_motion=args.relative_motion,
