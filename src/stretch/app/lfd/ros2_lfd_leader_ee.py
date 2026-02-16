@@ -60,7 +60,9 @@ class ROS2LfdLeader:
         relative_motion: bool = False,
         run_policy: bool = True,
         visualization_data_path: str = None,
-        visualize: bool = False
+        visualize: bool = False,
+        perf_debug: bool = False,
+
     ):
         self.robot = robot
 
@@ -71,7 +73,7 @@ class ROS2LfdLeader:
         self.depth_filter_k = depth_filter_k
         self.record_success = record_success
         self.verbose = verbose
-
+        self.perf_debug = perf_debug
         # Save metadata to pass to recorder
         self.metadata = {
             "recording_type": "Policy evaluation",
@@ -406,6 +408,12 @@ class ROS2LfdLeader:
         if start.capitalize() != "Y":
             return
 
+        if self.perf_debug:
+            perf_last_print = time.perf_counter()
+            perf_loop_count = 0
+            perf_new_obs_count = 0
+            perf_last_obs_id = None
+            perf_last_servo_seq = None
         try:
             while True:
                 loop_timer.mark_start()
@@ -413,6 +421,12 @@ class ROS2LfdLeader:
                 action = None
                 if self._run_policy:
                     observations = self.prepare_observation()
+                    _observation_id = id(self.robot.get_servo_observation())
+                    if self.perf_debug:
+                        perf_loop_count += 1
+                        if perf_last_obs_id is None or _observation_id != perf_last_obs_id:
+                            perf_new_obs_count += 1
+                            perf_last_obs_id = _observation_id
 
                     # Send observation to polic
                     time_before_inference = time.time()
@@ -475,6 +489,32 @@ class ROS2LfdLeader:
                     if action[8] >= PROGRESS_TH:
                         print('task succeed!')
                         break
+
+                    if self.perf_debug:
+                        now = time.perf_counter()
+                        dt = now - perf_last_print
+                        if dt >= 2.0:
+                            loop_rate = perf_loop_count / dt
+                            new_obs_rate = perf_new_obs_count / dt
+                            servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
+                            if perf_last_servo_seq is None:
+                                servo_rate = None
+                            else:
+                                servo_rate = (servo_seq - perf_last_servo_seq) / dt
+                            perf_last_servo_seq = servo_seq
+                            servo_age_ms = None if servo_age is None else servo_age * 1000.0
+                            servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
+                            if servo_rate is None:
+                                print(
+                                    f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
+                                )
+                            else:
+                                print(
+                                    f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
+                                )
+                            perf_last_print = now
+                            perf_loop_count = 0
+                            perf_new_obs_count = 0
                 else:
                     # If we aren't running the policy, what do we even need to do?
                     continue  # Skip the rest of the loop
@@ -537,6 +577,7 @@ if __name__ == "__main__":
         default=None,
         help="Path to data directory for visualization mode (should contain compressed_gripper_images/ and labels.json)."
     )
+    parser.add_argument("--perf_debug", action="store_true", help="Enable performance debugging.")
     args = parser.parse_args()
 
     # Parameters
@@ -571,7 +612,8 @@ if __name__ == "__main__":
         relative_motion=args.relative_motion,
         visualization_data_path=args.visualization_data_path,
         run_policy=not args.run_visualization,
-        visualize=args.visualize
+        visualize=args.visualize,
+        perf_debug=args.perf_debug
     )
 
     try:
