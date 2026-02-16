@@ -38,8 +38,8 @@ PROGRESS_TH=0.95
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
-HEAD_GOAL_SIZE = (320, 320) # H,W
-
+HEAD_GOAL_SIZE = (320, 240) # H,W
+DEBUG_OFFSET = np.array([0,0.06,0.0])
 
 
 class ROS2LfdLeader:
@@ -245,39 +245,46 @@ class ROS2LfdLeader:
 
         # get raw image
         gripper_color_image = observation.ee_rgb # RGB 
-        gripper_depth_image = (
-            observation.ee_depth.astype(np.float32) 
-        )
+        gripper_depth_image = observation.ee_depth.astype(np.float32)
+        gripper_cam_K = observation.ee_camera_K
+        gripper_cam_pose = observation.ee_camera_pose
+
         head_color_image = observation.rgb
         head_depth_image = observation.depth.astype(np.float32) 
         head_cam_K = observation.camera_K
-        gripper_cam_K = observation.ee_camera_K
-        gripper_cam_pose = observation.ee_camera_pose
         head_cam_pose = observation.camera_pose
 
         # process images to the target size
-        head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
-        # head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
+        # head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
+        # # head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
 
-        original_height, original_width = gripper_color_image.shape[:2]
-        gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        # gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        gripper_cam_K_resized= gripper_cam_K.copy()
-        scale_x = GRIPPER_GOAL_SIZE[1] / original_width
-        scale_y = GRIPPER_GOAL_SIZE[0] / original_height
-        gripper_cam_K_resized[0, 0] *= scale_x
-        gripper_cam_K_resized[1, 1] *= scale_y
-        gripper_cam_K_resized[0, 2] *= scale_x
-        gripper_cam_K_resized[1, 2] *= scale_y
+        # original_height, original_width = gripper_color_image.shape[:2]
+        # gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
+        # # gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
+        # gripper_cam_K_resized= gripper_cam_K.copy()
+        # scale_x = GRIPPER_GOAL_SIZE[1] / original_width
+        # scale_y = GRIPPER_GOAL_SIZE[0] / original_height
+        # gripper_cam_K_resized[0, 0] *= scale_x
+        # gripper_cam_K_resized[1, 1] *= scale_y
+        # gripper_cam_K_resized[0, 2] *= scale_x
+        # gripper_cam_K_resized[1, 2] *= scale_y
 
-        # make it to tensor
-        gripper_color_resized_ts = prepare_image(
-                        gripper_color_resized, self.device
-                    )
-        head_color_resized_ts = prepare_image(
-                        head_color_resized, self.device
-                    )
+        # # make it to tensor
+        # gripper_color_resized_ts = prepare_image(
+        #                 gripper_color_resized, self.device
+        #             )
+        # head_color_resized_ts = prepare_image(
+        #                 head_color_resized, self.device
+        #             )
 
+        # test new policy
+        assert gripper_color_image.shape == (240, 320, 3)
+        assert head_color_image.shape == (320, 240, 3)
+        gripper_color_resized_ts = prepare_image(gripper_color_image, self.device)
+        head_color_resized_ts = prepare_image(head_color_image, self.device)
+        gripper_cam_K_resized = gripper_cam_K
+        head_cam_K_resized = head_cam_K
+    
         obs = {
             "observation.state": current_state,  # (17), T_world_gripper, gripper_closure = state[:16].reshape(4, 4), state[16:]
             "observation.images.gripper": gripper_color_resized_ts,  # (1, 3, 240, 320)
@@ -450,6 +457,7 @@ class ROS2LfdLeader:
 
                     # TEMP, remove this after adapting the dataset preparation
                     # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
+                    pos += DEBUG_OFFSET
 
                     gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
         
