@@ -7,18 +7,64 @@
 # Some code may be adapted from other open-source works with their respective licenses. Original
 # license information maybe found below, if so.
 
+import warnings
 import numpy as np
 import torch
-from lerobot.common.policies.act.modeling_act import ACTPolicy
-from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
-from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
-from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
-from lerobot.common.policies.dummy_policy import DummyPolicy
 from torchvision.transforms import v2
 import scipy.spatial.transform as tra
 import cv2
 
-SUPPORTED_POLICIES = ["act", "diffusion", "diffusion_depth", "vqbet"]
+# Lazy imports for lerobot policies
+_lerobot_policies = {}
+_lerobot_import_warned = False
+
+
+def _lazy_import_lerobot_policy(policy_name: str):
+    """Lazily import lerobot policy classes with warning if not available."""
+    global _lerobot_policies, _lerobot_import_warned
+    
+    # Return cached import if already loaded
+    if policy_name in _lerobot_policies:
+        return _lerobot_policies[policy_name]
+    
+    try:
+        if policy_name == "act":
+            from lerobot.common.policies.act.modeling_act import ACTPolicy
+            _lerobot_policies[policy_name] = ACTPolicy
+            return ACTPolicy
+        elif policy_name == "diffusion":
+            from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+            _lerobot_policies[policy_name] = DiffusionPolicy
+            return DiffusionPolicy
+        elif policy_name == "diffusion_depth":
+            from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
+            _lerobot_policies[policy_name] = DPdepth
+            return DPdepth
+        elif policy_name == "vqbet":
+            from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
+            _lerobot_policies[policy_name] = VQBeTPolicy
+            return VQBeTPolicy
+        elif policy_name == "dummy":
+            from lerobot.common.policies.dummy_policy import DummyPolicy
+            _lerobot_policies[policy_name] = DummyPolicy
+            return DummyPolicy
+        else:
+            raise ValueError(f"Unknown policy name: {policy_name}")
+    except ImportError as e:
+        if not _lerobot_import_warned:
+            warnings.warn(
+                f"lerobot packages not available. Cannot import {policy_name} policy. "
+                f"Error: {e}. Please install lerobot if you need policy functionality.",
+                ImportWarning,
+                stacklevel=2
+            )
+            _lerobot_import_warned = True
+        raise ImportError(
+            f"lerobot packages not available. Cannot load {policy_name} policy. "
+            f"Please install lerobot: pip install lerobot"
+        ) from e
+
+SUPPORTED_POLICIES = ["act", "diffusion", "diffusion_depth", "vqbet", "dummy"]
 GRIPPER_MIN=-0.3
 GRIPPER_MAX=0.6
 
@@ -26,21 +72,20 @@ def load_policy(
     policy_name: str | None = None, policy_path: str | None = None, device: str | None = "cuda"
 ):
     """Loads specified policy with name and path. Current supported policies include 'act', 'diffusion'"""
-    policy = None
-    if policy_name == "act":
-        policy = ACTPolicy.from_pretrained(policy_path)
-    elif policy_name == "diffusion":
-        policy = DiffusionPolicy.from_pretrained(policy_path)
-    elif policy_name == "diffusion_depth":
-        policy = DPdepth.from_pretrained(policy_path)
-    elif policy_name == "vqbet":
-        policy = VQBeTPolicy.from_pretrained(policy_path)
-    elif policy_name == "dummy":
-        policy = DummyPolicy(policy_path)
-    else:
+    if policy_name not in SUPPORTED_POLICIES and policy_name != "dummy":
         raise NotImplementedError(
             f"{policy_name} is not a supported policy. Supported policies: {SUPPORTED_POLICIES}"
         )
+    
+    # Lazy import the policy class
+    PolicyClass = _lazy_import_lerobot_policy(policy_name)
+    
+    # Load the policy
+    if policy_name == "dummy":
+        policy = PolicyClass(policy_path)
+    else:
+        policy = PolicyClass.from_pretrained(policy_path)
+    
     policy.to(device)
     policy.eval()
 
@@ -241,3 +286,71 @@ def unnormalize_gripper(gripper: float) -> float:
     # revert normalized gripper [0, 1] to [Gripper_MIN, Gripper_MAX]
     gripper = np.clip(gripper, 0, 1)
     return GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
+
+
+def process_vertical_image(orig_image: np.ndarray, target_height: int, target_width: int, intrinsic: np.ndarray = None, cut_mode: str = "top"):
+    """
+    process the vertical image and return the new image and intrinsic matrix
+    Args:
+        orig_image: np.ndarray, the original image
+        target_height: int, the target height of the cropped image
+        target_width: int, the target width of the cropped image
+        intrinsic: np.ndarray, the intrinsic matrix of the camera
+        cut_mode: str, the mode to crop the image
+    Returns:
+        new_image: np.ndarray, the new image
+        new_intrinsic: np.ndarray, the new intrinsic matrix
+    """
+    if orig_image.ndim == 2:
+        DEPTH_MODE=True
+    else:
+        DEPTH_MODE=False
+    orig_height, orig_width = orig_image.shape[0], orig_image.shape[1]
+    assert orig_height > orig_width, "Original height must be greater than width"
+    
+
+    # 1. Determine Crop Offset
+    cropped_height = orig_width
+    padding = (orig_height - cropped_height) // 2
+    if cut_mode == "bottom":
+        y_offset = 2 * padding
+    elif cut_mode == "center":
+        y_offset = padding
+    elif cut_mode == "top":
+        y_offset = 0
+    else:
+        raise NotImplementedError
+    
+    # apply resize 
+    if DEPTH_MODE:
+        new_image = np.zeros((orig_width, orig_width), dtype=np.float32)
+        new_image = orig_image[y_offset : y_offset + orig_width, 0 : orig_width]
+        new_image_resized = cv2.resize(new_image, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
+    else:
+        new_image = np.zeros((orig_width, orig_width, 3), dtype=np.uint8)
+        new_image = orig_image[y_offset : y_offset + orig_width, 0 : orig_width, :]
+        new_image_resized = cv2.resize(new_image, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+
+        
+    # 2. Update Intrinsic for Crop
+    if intrinsic is not None:
+        new_intrinsic = intrinsic.copy()
+        # Shift principal point by the crop offset
+        # cx remains same because x_offset is 0
+        new_intrinsic[1, 2] = intrinsic[1, 2] - y_offset 
+        
+        # 3. Handle Resize
+        # Note: new_image currently has shape (target_height, orig_width)
+        # We are resizing it to (target_width, target_height)
+        scale_x = target_width / orig_width
+        scale_y = target_height / cropped_height # This is 1.0 in your current logic!
+        
+        # Apply scaling to the whole matrix (fx, fy, cx, cy)
+        new_intrinsic[0, 0] *= scale_x
+        new_intrinsic[0, 2] *= scale_x
+        new_intrinsic[1, 1] *= scale_y
+        new_intrinsic[1, 2] *= scale_y
+    else:
+        new_intrinsic = None
+
+    return new_image_resized, new_intrinsic

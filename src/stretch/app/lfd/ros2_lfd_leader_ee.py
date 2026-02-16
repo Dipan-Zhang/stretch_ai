@@ -25,8 +25,7 @@ from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
 import stretch.app.lfd.visualize_utils as vis_utils
-from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs, unnormalize_gripper
-from stretch.app.lfd.infer_utils import process_vertical_image
+from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs, unnormalize_gripper, process_vertical_image
 import time
 from PIL import Image
 from scipy.spatial.transform import Rotation as R

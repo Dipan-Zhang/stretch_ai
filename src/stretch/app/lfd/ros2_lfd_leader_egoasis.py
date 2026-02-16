@@ -24,7 +24,6 @@ import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
 from stretch.agent.zmq_client import HomeRobotZmqClient
-# from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs, process_vertical_image
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
@@ -32,7 +31,7 @@ import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
 from easydict import EasyDict as edict 
-from stretch.app.lfd.infer_utils import process_vertical_image
+from stretch.app.lfd.policy_utils import process_vertical_image, unnormalize_gripper, normalize_gripper
 # policy HACK
 sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
 import utils.dataset_utils as DatasetUtils # type: ignore
@@ -43,8 +42,7 @@ import time
 from termcolor import colored
 from scipy.spatial.transform import Rotation as R
 PROGRESS_TH=0.95
-GRIPPER_MIN=-0.3
-GRIPPER_MAX=0.6
+
 DEFAULT_FPS = 15
 QUERY_HORIZON = 15
 EXECUTE_HORIZON = 15
@@ -124,15 +122,7 @@ def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic
     return
 
 
-def normalize_gripper(gripper: float) -> float:
-    # normalize gripper [Gripper_MIN, Gripper_MAX] to [0, 1]
-    gripper = np.clip(gripper, GRIPPER_MIN, GRIPPER_MAX)
-    return (gripper - GRIPPER_MIN) / (GRIPPER_MAX - GRIPPER_MIN)
 
-def unnormalize_gripper(gripper: float) -> float:
-    # revert normalized gripper [0, 1] to [Gripper_MIN, Gripper_MAX]
-    gripper = np.clip(gripper, 0, 1)
-    return GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
 
 def process_robot_state(observation: dict, joint_states) -> np.ndarray:
     # return state in format (17,) T_world_gripper, gripper_closure
@@ -630,9 +620,9 @@ class ROS2LfdLeaderEgoasis:
                     target_pos=pos, 
                     target_quat=quat, 
                     target_gripper=gripper, 
-                    max_iter_time=10, 
-                    pos_err_threshold=0.01,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
-                    rot_err_threshold=3,  # Relaxed from 2° to 5° for faster convergence
+                    max_iter_time=1, 
+                    pos_err_threshold=0.02,  # Relaxed from 0.01 to 0.02m (2cm) for faster convergence
+                    rot_err_threshold=5,  # Relaxed from 2° to 5° for faster convergence
                     gripper_err_threshold=0.1,
                     world_frame=False,
                     blocking=True,
@@ -660,9 +650,9 @@ class ROS2LfdLeaderEgoasis:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--policy_cfg", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_noprogress/config.yaml")
-    parser.add_argument("--ckpt", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_noprogress/iter25000.ckpt")
+    parser = argparse.ArgumentParser()  
+    parser.add_argument("--policy_cfg", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_wprogres/config.yaml")
+    parser.add_argument("--ckpt", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_wprogres/iter28000.ckpt")
     parser.add_argument("-i", "--robot_ip", type=str, default="192.168.1.10", help="Robot IP address")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-l", "--logging_cfg", type=str, default="./src/stretch/app/lfd/logging.yaml")
