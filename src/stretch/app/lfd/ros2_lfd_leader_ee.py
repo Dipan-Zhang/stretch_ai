@@ -25,7 +25,7 @@ from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
 import stretch.app.lfd.visualize_utils as vis_utils
-from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs
+from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs, unnormalize_gripper
 from stretch.app.lfd.infer_utils import process_vertical_image
 import time
 from PIL import Image
@@ -35,8 +35,6 @@ from omegaconf import OmegaConf
 
 
 PROGRESS_TH=0.95
-GRIPPER_MIN=-0.3
-GRIPPER_MAX=0.6
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
 DEBUG_OFFSET = np.array([0,0.06,0.0])
@@ -421,12 +419,12 @@ class ROS2LfdLeader:
                 action = None
                 if self._run_policy:
                     observations = self.prepare_observation()
-                    _observation_id = id(self.robot.get_servo_observation())
+                    servo_seq, _, _ = self.robot.get_servo_stats()
                     if self.perf_debug:
                         perf_loop_count += 1
-                        if perf_last_obs_id is None or _observation_id != perf_last_obs_id:
+                        if perf_last_obs_id is None or servo_seq != perf_last_obs_id:
                             perf_new_obs_count += 1
-                            perf_last_obs_id = _observation_id
+                            perf_last_obs_id = servo_seq
 
                     # Send observation to polic
                     time_before_inference = time.time()
@@ -434,7 +432,8 @@ class ROS2LfdLeader:
                         raw_action, full_actions = self.policy.select_action(observations, return_full_actions=True) # relative cartesian pose xyz, quaternion wxyz
 
                     time_after_inference = time.time()
-                    print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
+                    if self.perf_debug:
+                        print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
 
                     action = raw_action[0].tolist() # [n_action, n_dim]
                     if self.relative_motion:
@@ -460,21 +459,16 @@ class ROS2LfdLeader:
                         # Extract position and quaternion from resulting absolute pose
                         pos = self.current_pose[:3, 3]
                         quat = tra.Rotation.from_matrix(self.current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
-                        gripper = action[7]
+                        gripper = unnormalize_gripper(action[7]) 
                     else:
                         pos = action[:3]
                         quat = action[3:7]
-                        gripper = action[7] 
+                        gripper = unnormalize_gripper(action[7])
+                        pos += DEBUG_OFFSET 
 
                     if self.visualize:
                         self.visualize_action(observations, full_actions, visualize_3d=False)
 
-                    # TEMP, remove this after adapting the dataset preparation
-                    # remap to [0, 1] to [GRIPPER_MIN, GRIPPER_MAX]
-                    pos += DEBUG_OFFSET
-
-                    gripper = GRIPPER_MIN + (GRIPPER_MAX - GRIPPER_MIN) * gripper
-        
                     print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
                     self.go_to_target_pose(
                         pos, 
