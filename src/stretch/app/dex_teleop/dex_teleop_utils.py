@@ -87,9 +87,9 @@ def format_actions(raw_actions: dict):
             raw_actions[x] = 0.0
 
     # Remove individual arm joints
-    del raw_actions["joint_arm_l1"]
-    del raw_actions["joint_arm_l2"]
-    del raw_actions["joint_arm_l3"]
+    # del raw_actions["joint_arm_l1"]
+    # del raw_actions["joint_arm_l2"]
+    # del raw_actions["joint_arm_l3"]
 
     return raw_actions
 
@@ -97,6 +97,9 @@ def format_actions(raw_actions: dict):
 def get_teleop_controlled_joints(teleop_mode: str):
     arm = [
         "joint_arm_l0",
+        # "joint_arm_l1",
+        # "joint_arm_l2",
+        # "joint_arm_l3",
         "joint_lift",
         "joint_wrist_yaw",
         "joint_wrist_pitch",
