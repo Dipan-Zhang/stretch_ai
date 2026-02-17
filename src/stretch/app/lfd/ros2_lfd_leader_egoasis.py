@@ -31,7 +31,7 @@ import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
 from easydict import EasyDict as edict 
-from stretch.app.lfd.policy_utils import process_vertical_image, unnormalize_gripper, normalize_gripper
+from stretch.app.lfd.policy_utils import process_vertical_image, unnormalize_gripper, normalize_gripper, ask_for_input
 # policy HACK
 sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
 import utils.dataset_utils as DatasetUtils # type: ignore
@@ -634,16 +634,16 @@ class ROS2LfdLeaderEgoasis:
 
         finally:
             # Go to initial pose
-            input("Go to home pose: Y/N?")
-            obs = self.robot.get_servo_observation()
-            self.robot.arm_to_ee_pose(
-                pos = HOME_POS,
-                quat = None, 
-                gripper = 1.0, 
-                world_frame = False,
-                reliable = True,
-                blocking = True,
-            )
+            if ask_for_input("Confirm go to home pose?"):
+                obs = self.robot.get_servo_observation()
+                self.robot.arm_to_ee_pose(
+                    pos = HOME_POS,
+                    quat = None, 
+                    gripper = 1.0, 
+                    world_frame = False,
+                    reliable = True,
+                    blocking = True,
+                )
 
 
 if __name__ == "__main__":

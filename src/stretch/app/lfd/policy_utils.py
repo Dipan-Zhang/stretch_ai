@@ -13,11 +13,12 @@ import torch
 from torchvision.transforms import v2
 import scipy.spatial.transform as tra
 import cv2
+import warnings
+
 
 # Lazy imports for lerobot policies
 _lerobot_policies = {}
 _lerobot_import_warned = False
-
 
 def _lazy_import_lerobot_policy(policy_name: str):
     """Lazily import lerobot policy classes with warning if not available."""
@@ -354,3 +355,15 @@ def process_vertical_image(orig_image: np.ndarray, target_height: int, target_wi
         new_intrinsic = None
 
     return new_image_resized, new_intrinsic
+
+
+def ask_for_input(prompt: str) -> bool:
+    """Ask the user if the episode was successful."""
+    while True:
+        response = input(prompt + " (y/n): ")
+        if response.lower() == "y":
+            return True
+        elif response.lower() == "n":
+            return False
+        else:
+            print("Please enter 'y' or 'n'")
