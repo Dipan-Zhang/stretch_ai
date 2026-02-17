@@ -33,11 +33,11 @@ from easydict import EasyDict as edict
 from omegaconf import OmegaConf
 
 
-PROGRESS_TH=0.95
+PROGRESS_TH=0.9
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
 DEBUG_OFFSET = np.array([0,0.06,0.0])
-
+HOME_POS = np.array([-0.025, -0.35, 0.85])
 
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
@@ -53,7 +53,7 @@ class ROS2LfdLeader:
         depth_filter_k=None,
         relative_motion: bool = False,
         logging_cfg: edict = None,
-        disable_recording: bool = True,
+        recording: bool = False,
         record_success: bool = True,
         automatic_reset: bool = False,
         visualize: bool = False,
@@ -82,8 +82,7 @@ class ROS2LfdLeader:
             "backend": "ros2",
         }
 
-        self._disable_recording = disable_recording
-        self._recording = not self._disable_recording
+        self._recording = recording
         self.automatic_reset = automatic_reset
         self._recorder = FileDataRecorder(
             logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
@@ -271,14 +270,15 @@ class ROS2LfdLeader:
             "depths.gripper": gripper_depth_image,
             "depths.head": head_depth_image,
             "ee_pose": observation.ee_pose,
+            "joint_states": joint_states,
             "gripper": normalize_gripper(gripper_joint),
         }
         return obs
 
     def visualize_action(self, obs, action_chunk, visualize_3d: bool = False):
         # current_state = obs["observation.state"].copy()
-        head_color_resized = obs["observation.images.head"][0].cpu().numpy().transpose(1, 2, 0) # (320, 320, 3)
-        gripper_color_resized = obs["observation.images.gripper"][0].cpu().numpy().transpose(1, 2, 0) # (240, 320, 3)
+        head_color_resized = obs["images.head"].copy() # (320, 320, 3)
+        gripper_color_resized = obs["images.gripper"].copy() # (240, 320, 3)
         head_cam_K_resized = obs["HEAD_CAM_K"].copy()
         gripper_cam_K_resized = obs["EE_CAM_K"].copy()
         T_base_head_cam = obs["head_cam_pose"].copy()  # (4,4)
@@ -293,8 +293,8 @@ class ROS2LfdLeader:
         # curr_state_vis[3:7] = quat_curr_state_vis
         # curr_state_vis[7] = current_state[16]
         # curr_state_vis = curr_state_vis.astype(np.float32)
-        head_image_for_vis = (head_color_resized * 255.0).astype(np.uint8)
-        gripper_cam_for_vis = (gripper_color_resized * 255.0).astype(np.uint8)
+        head_image_for_vis = head_color_resized.astype(np.uint8)
+        gripper_cam_for_vis = gripper_color_resized.astype(np.uint8)
         closure = latest_action_chunk[0, 7]
         if closure < 0.5:
             cmap_name = "turbo"
@@ -379,8 +379,7 @@ class ROS2LfdLeader:
 
         self.robot_standby()
 
-        start = input("Start mission: Y/N?")
-        if start.capitalize() != "Y":
+        if not ask_for_input("Start mission? "):
             return
 
         if self.perf_debug:
@@ -436,7 +435,7 @@ class ROS2LfdLeader:
 
                 if self.visualize:
                     self.visualize_action(observations, full_actions, visualize_3d=False)
-
+    
                 print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
                 self.go_to_target_pose(
                     pos, 
@@ -451,14 +450,17 @@ class ROS2LfdLeader:
                 if self._recording:
                     # Record episode if enabled
                     observation_dict = {
-                        "joint_states": None,
+                        "joint_states": observations["joint_states"],
                         "ee_pose": observations["ee_pose"].tolist(),
                         "gripper": observations["gripper"].tolist()
                     }
+                    ee_goal_pose = np.eye(4)
+                    ee_goal_pose[:3, 3] = action[:3]
+                    ee_goal_pose[:3, :3] = tra.Rotation.from_quat(action[3:7]).as_matrix()
                     action_dict = {
                         "joint_states_goal": None,
-                        "ee_goal_pose": action[:7].tolist(), # xyz, quaternion
-                        "gripper_goal": action[7].tolist(), # 0,1
+                        "ee_goal_pose": ee_goal_pose.tolist(), # xyz, quaternion
+                        "gripper_goal": action[7], # 0,1
                     }
                     self._recorder.add(
                         ee_rgb=observations["images.gripper"],
@@ -467,8 +469,9 @@ class ROS2LfdLeader:
                         ee_cam_K=observations["EE_CAM_K"],
                         xyz=np.array([0]),
                         quaternion=np.array([0]),
-                        gripper=gripper,
+                        gripper=action[7],
                         ee_pose=observations["ee_pose"],
+                        ee_goal_pose=np.array(action[:7]),
                         observations=observation_dict,
                         actions=action_dict, # joint_goal_configuration, ee_goal_pose, gripper_goal
                         head_rgb=observations["images.head"],
@@ -527,28 +530,36 @@ class ROS2LfdLeader:
                         self.current_pose = None
                     
                     if self.automatic_reset:
+                        self.policy.reset()
+                        self.robot.arm_to_ee_pose(
+                            pos=HOME_POS,
+                            quat=None, 
+                            gripper=0.8, 
+                            world_frame=False,
+                            reliable=True,
+                            blocking=True,
+                        )
+                        time.sleep(3.0)
                         if ask_for_input("Confirm reset position and restart mission?"):
-                            self.policy.reset()
                             self.robot_standby()
                             self.robot.reset_manipulation_base_pose()
                             # current_pose will be reinitialized in robot_standby
                             continue
+                        else:
+                            break
                     else:
                         break
                 
         finally:
             # Go to initial pose, open the gripper
             if ask_for_input("Open the gripper?"):
-                obs = self.robot.get_servo_observation()
-                curr_pos = obs.ee_pose[:3, 3]
-                curr_quat = R.from_matrix(obs.ee_pose[:3, :3]).as_quat()
                 self.robot.arm_to_ee_pose(
-                    pos = curr_pos,
-                    quat = curr_quat, 
-                    gripper = 0.8, 
-                    world_frame = False,
-                    reliable = True,
-                    blocking = True,
+                    pos=HOME_POS,
+                    quat=None, 
+                    gripper=0.8, 
+                    world_frame=False,
+                    reliable=True,
+                    blocking=True,
                 )
 
 if __name__ == "__main__":
@@ -579,11 +590,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rerun", action="store_true", help="Enable rerun server for visualization."
     )
-    parser.add_argument("--env_name", type=str, default="default_env")
+    parser.add_argument("--recording", action="store_true", default=False, help="Enable recording.")
     parser.add_argument("--task_name", type=str, default="default_task")
     parser.add_argument("--user_name", type=str, default="default_user")
+    parser.add_argument("--env_name", type=str, default="default_env")
     parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
-    parser.add_argument("--automatic_reset", action="store_true", help="Automatic reset position and restart mission.")
+    parser.add_argument("--automatic_reset", action="store_true", default=False, help="Automatic reset position and restart mission.")
     parser.add_argument("--visualize", action="store_true", help="Use relative motion.")
     parser.add_argument("--perf_debug", action="store_true", help="Enable performance debugging.")
     args = parser.parse_args()
@@ -612,9 +624,9 @@ if __name__ == "__main__":
     leader = ROS2LfdLeader(
         robot=robot,
         verbose=args.verbose,
+        recording=args.recording,
         logging_cfg=logging_cfg,
         teleop_mode=args.teleop_mode,
-        record_success=args.record_success,
         policy_name=args.policy_name,
         policy_path=args.policy_path,
         device=args.device,
