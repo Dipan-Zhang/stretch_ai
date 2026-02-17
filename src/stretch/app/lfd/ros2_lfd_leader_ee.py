@@ -55,8 +55,6 @@ class ROS2LfdLeader:
         depth_filter_k=None,
         disable_recording: bool = False,
         relative_motion: bool = False,
-        run_policy: bool = True,
-        visualization_data_path: str = None,
         visualize: bool = False,
         perf_debug: bool = False,
 
@@ -97,16 +95,10 @@ class ROS2LfdLeader:
                 "action_type": "real" # real or fake
             })
         self.relative_motion = relative_motion
-        self._run_policy = run_policy
-        self.visualize_trajectory = not self._run_policy
-        self.visualization_data_path = visualization_data_path
         # Track current pose for relative motion mode
         self.current_pose = None
         self.visualize = visualize
 
-        if self.visualize_trajectory:
-            assert self.visualization_data_path is not None, 'visualization_data_path must be provided when visualize_trajectory is enabled'
-        
         if self.relative_motion:
             assert ('rel' in policy_path) or ('rum' in policy_path), 'Policy path is for relative motion, but relative motion is disabled. Please check the policy path.'
 
@@ -523,12 +515,6 @@ if __name__ == "__main__":
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
     parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
     parser.add_argument("--visualize", action="store_true", help="Use relative motion.")
-    parser.add_argument(
-        "--visualization_data_path",
-        type=str,
-        default=None,
-        help="Path to data directory for visualization mode (should contain compressed_gripper_images/ and labels.json)."
-    )
     parser.add_argument("--perf_debug", action="store_true", help="Enable performance debugging.")
     args = parser.parse_args()
 
@@ -539,18 +525,15 @@ if __name__ == "__main__":
     logging_cfg = edict(OmegaConf.load(args.logging_cfg))
 
     # Zmq client
-    if args.run_visualization:
-        robot = None
-    else:
-        robot = HomeRobotZmqClient(
-            robot_ip=args.robot_ip,
-            send_port=args.send_port,
-            parameters=parameters,
-            manip_mode_controlled_joints=MANIP_MODE_CONTROLLED_JOINTS,
-            enable_rerun_server=args.rerun,
-        )
-        robot.switch_to_manipulation_mode()
-        robot.move_to_manip_posture()
+    robot = HomeRobotZmqClient(
+        robot_ip=args.robot_ip,
+        send_port=args.send_port,
+        parameters=parameters,
+        manip_mode_controlled_joints=MANIP_MODE_CONTROLLED_JOINTS,
+        enable_rerun_server=args.rerun,
+    )
+    robot.switch_to_manipulation_mode()
+    robot.move_to_manip_posture()
 
     leader = ROS2LfdLeader(
         robot=robot,
@@ -562,8 +545,6 @@ if __name__ == "__main__":
         policy_path=args.policy_path,
         device=args.device,
         relative_motion=args.relative_motion,
-        visualization_data_path=args.visualization_data_path,
-        run_policy=not args.run_visualization,
         visualize=args.visualize,
         perf_debug=args.perf_debug
     )
