@@ -30,9 +30,6 @@ setuptools.setup(
     package_data={"stretch": ["config/**/*.yaml", "perception/*.tsv", "simulation/models/*"]},
     install_requires=[
         # Machine learning code, we will install these packages in install.sh instead
-        "torch>=2.6",
-        "torchvision",
-        "torchaudio",
         # General utilities
         "pyyaml",
         "pyzmq",
@@ -56,8 +53,6 @@ setuptools.setup(
         "openai-clip",
         # For gemini
         "google-genai",
-        # For Yolo
-        "ultralytics==8.3.161",
         # Hardware dependencies
         "hello-robot-stretch-urdf",
         "pyrealsense2",
@@ -107,6 +102,12 @@ setuptools.setup(
             "black",
             "mypy",
             "lark",
+        ],
+        "full": [
+            "torch>=2.6",
+            "torchvision",
+            "torchaudio",
+            # "ultralytics==8.3.161",
         ],
         "discord": [
             "discord.py",

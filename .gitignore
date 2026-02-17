@@ -142,3 +142,6 @@ debug*/
 */piper_tts/
 piper_tts/
 *.ts
+third_party/
+simple_tests/
+weights
