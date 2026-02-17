@@ -121,9 +121,6 @@ def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic
             pass
     return
 
-
-
-
 def process_robot_state(observation: dict, joint_states) -> np.ndarray:
     # return state in format (17,) T_world_gripper, gripper_closure
     state = np.zeros(17)

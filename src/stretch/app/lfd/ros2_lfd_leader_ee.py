@@ -128,8 +128,6 @@ class ROS2LfdLeader:
         )
         time.sleep(0.05)
 
-    
-
     def go_to_target_pose(
         self,
         target_pos: np.ndarray, 
@@ -253,30 +251,6 @@ class ROS2LfdLeader:
         head_cam_K = observation.camera_K
         head_cam_pose = observation.camera_pose
 
-        # process images to the target size
-        # head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
-        # # head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="center")
-
-        # original_height, original_width = gripper_color_image.shape[:2]
-        # gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        # # gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        # gripper_cam_K_resized= gripper_cam_K.copy()
-        # scale_x = GRIPPER_GOAL_SIZE[1] / original_width
-        # scale_y = GRIPPER_GOAL_SIZE[0] / original_height
-        # gripper_cam_K_resized[0, 0] *= scale_x
-        # gripper_cam_K_resized[1, 1] *= scale_y
-        # gripper_cam_K_resized[0, 2] *= scale_x
-        # gripper_cam_K_resized[1, 2] *= scale_y
-
-        # # make it to tensor
-        # gripper_color_resized_ts = prepare_image(
-        #                 gripper_color_resized, self.device
-        #             )
-        # head_color_resized_ts = prepare_image(
-        #                 head_color_resized, self.device
-        #             )
-
-        # test new policy
         assert gripper_color_image.shape == (240, 320, 3)
         assert head_color_image.shape == (320, 240, 3)
         gripper_color_resized_ts = prepare_image(gripper_color_image, self.device)
@@ -416,101 +390,86 @@ class ROS2LfdLeader:
                 loop_timer.mark_start()
 
                 action = None
-                if self._run_policy:
-                    observations = self.prepare_observation()
-                    servo_seq, _, _ = self.robot.get_servo_stats()
-                    if self.perf_debug:
-                        perf_loop_count += 1
-                        if perf_last_obs_id is None or servo_seq != perf_last_obs_id:
-                            perf_new_obs_count += 1
-                            perf_last_obs_id = servo_seq
+                observations = self.prepare_observation()
+                servo_seq, _, _ = self.robot.get_servo_stats()
+                if self.perf_debug:
+                    perf_loop_count += 1
+                    if perf_last_obs_id is None or servo_seq != perf_last_obs_id:
+                        perf_new_obs_count += 1
+                        perf_last_obs_id = servo_seq
 
-                    # Send observation to polic
-                    time_before_inference = time.time()
-                    with torch.inference_mode():
-                        raw_action, full_actions = self.policy.select_action(observations, return_full_actions=True) # relative cartesian pose xyz, quaternion wxyz
+                # Send observation to polic
+                time_before_inference = time.time()
+                with torch.inference_mode():
+                    raw_action, full_actions = self.policy.select_action(observations, return_full_actions=True) # relative cartesian pose xyz, quaternion wxyz
 
-                    time_after_inference = time.time()
-                    if self.perf_debug:
-                        print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
+                time_after_inference = time.time()
+                if self.perf_debug:
+                    print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
 
-                    action = raw_action[0].tolist() # [n_action, n_dim]
-                    if self.relative_motion:
-                        # Every 8 steps (new action chunk), refresh current_pose from observation
-                        # This happens at the START of a new chunk, before applying the first action
-                        # Following the pattern from test_actionchunk_rel2abs: when starting a chunk,
-                        # we need the current absolute pose, then apply all actions in the chunk sequentially
-                        # if (_t_debug) % 8 == 0:
-                        #     # Get current absolute pose from robot (this is the pose BEFORE applying the first action of the chunk)
-                        #     self.current_pose = observation.ee_pose.copy()
-                        #     print(f'idx {_t_debug}: current pose refreshed for new chunk!')
-                        #     print(f'  Current pose position: {self.current_pose[:3, 3]}')
-                        
-                        # Build relative transformation matrix from action
-                        T_rel = np.eye(4)
-                        T_rel[:3, 3] = np.array(action[:3])  # Translation
-                        quat_action = np.array(action[3:7])  # [qx, qy, qz, qw]
-                        T_rel[:3, :3] = tra.Rotation.from_quat(quat_action).as_matrix()
-                        
-                        # Apply relative transformation: new_abs = current_abs @ T_rel
-                        # This matches the visualization code: current_pose = current_pose @ T_rel
-                        self.current_pose = self.current_pose @ T_rel
-                        # Extract position and quaternion from resulting absolute pose
-                        pos = self.current_pose[:3, 3]
-                        quat = tra.Rotation.from_matrix(self.current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
-                        gripper = unnormalize_gripper(action[7]) 
-                    else:
-                        pos = action[:3]
-                        quat = action[3:7]
-                        gripper = unnormalize_gripper(action[7])
-                        pos += DEBUG_OFFSET 
-
-                    if self.visualize:
-                        self.visualize_action(observations, full_actions, visualize_3d=False)
-
-                    print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
-                    self.go_to_target_pose(
-                        pos, 
-                        quat, 
-                        gripper, 
-                        max_iter_time=10, 
-                        pos_err_threshold=0.01, 
-                        rot_err_threshold=2, 
-                        world_frame=False,
-                        blocking=False)
-                        
-                    if action[8] >= PROGRESS_TH:
-                        print('task succeed!')
-                        break
-
-                    if self.perf_debug:
-                        now = time.perf_counter()
-                        dt = now - perf_last_print
-                        if dt >= 2.0:
-                            loop_rate = perf_loop_count / dt
-                            new_obs_rate = perf_new_obs_count / dt
-                            servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
-                            if perf_last_servo_seq is None:
-                                servo_rate = None
-                            else:
-                                servo_rate = (servo_seq - perf_last_servo_seq) / dt
-                            perf_last_servo_seq = servo_seq
-                            servo_age_ms = None if servo_age is None else servo_age * 1000.0
-                            servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
-                            if servo_rate is None:
-                                print(
-                                    f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
-                                )
-                            else:
-                                print(
-                                    f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
-                                )
-                            perf_last_print = now
-                            perf_loop_count = 0
-                            perf_new_obs_count = 0
+                action = raw_action[0].tolist() # [n_action, n_dim]
+                if self.relative_motion:
+                    # Every 8 steps (new action chunk), refresh current_pose from observation
+                    T_rel = np.eye(4)
+                    T_rel[:3, 3] = np.array(action[:3])  # Translation
+                    quat_action = np.array(action[3:7])  # [qx, qy, qz, qw]
+                    T_rel[:3, :3] = tra.Rotation.from_quat(quat_action).as_matrix()
+                    
+                    # Apply relative transformation: new_abs = current_abs @ T_rel
+                    self.current_pose = self.current_pose @ T_rel
+                    pos = self.current_pose[:3, 3]
+                    quat = tra.Rotation.from_matrix(self.current_pose[:3, :3]).as_quat()  # Returns [x, y, z, w]
+                    gripper = unnormalize_gripper(action[7]) 
                 else:
-                    # If we aren't running the policy, what do we even need to do?
-                    continue  # Skip the rest of the loop
+                    pos = action[:3]
+                    quat = action[3:7]
+                    gripper = unnormalize_gripper(action[7])
+                    # ! DEBUG ONLY, remove this after installing new arm joint
+                    pos += DEBUG_OFFSET 
+
+                if self.visualize:
+                    self.visualize_action(observations, full_actions, visualize_3d=False)
+
+                print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
+                self.go_to_target_pose(
+                    pos, 
+                    quat, 
+                    gripper, 
+                    max_iter_time=10, 
+                    pos_err_threshold=0.01, 
+                    rot_err_threshold=2, 
+                    world_frame=False,
+                    blocking=False)
+                    
+                if action[8] >= PROGRESS_TH:
+                    print('task succeed!')
+                    break
+
+                if self.perf_debug:
+                    now = time.perf_counter()
+                    dt = now - perf_last_print
+                    if dt >= 2.0:
+                        loop_rate = perf_loop_count / dt
+                        new_obs_rate = perf_new_obs_count / dt
+                        servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
+                        if perf_last_servo_seq is None:
+                            servo_rate = None
+                        else:
+                            servo_rate = (servo_seq - perf_last_servo_seq) / dt
+                        perf_last_servo_seq = servo_seq
+                        servo_age_ms = None if servo_age is None else servo_age * 1000.0
+                        servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
+                        if servo_rate is None:
+                            print(
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
+                            )
+                        else:
+                            print(
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
+                            )
+                        perf_last_print = now
+                        perf_loop_count = 0
+                        perf_new_obs_count = 0
 
                 if self.verbose:
                     loop_timer.mark_end()
