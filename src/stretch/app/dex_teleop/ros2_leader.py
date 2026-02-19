@@ -432,17 +432,19 @@ class ZmqRos2Leader:
         print("Press ESC to exit.")
 
         # loop stuff for clutch
-        last_recorded_obs_id = None
         clutched = False
         clutch_debounce_threshold = 3
         change_clutch_count = 0
         check_hand_frame_skip = 3
         i = 0
         max_i = 100  # arbitrary number of iterations
+        last_recorded_servo_seq = None
+        
         if self.perf_debug:
             perf_last_print = time.perf_counter()
             perf_loop_count = 0
             perf_new_obs_count = 0
+            perf_record_count = 0  # Track number of recordings
             perf_last_obs_id = None
             perf_last_servo_seq = None
 
@@ -464,12 +466,13 @@ class ZmqRos2Leader:
                 if self.perf_debug:
                     perf_loop_count += 1
                     observation = self.robot.get_servo_observation()
-                    obs_id = id(observation)
-                    if perf_last_obs_id is None or obs_id != perf_last_obs_id:
+                    servo_seq, _, _ = self.robot.get_servo_stats()
+                    if perf_last_obs_id is None or servo_seq != perf_last_obs_id:
                         perf_new_obs_count += 1
-                        perf_last_obs_id = obs_id
+                        perf_last_obs_id = servo_seq
                 else:
                     observation = self.robot.get_servo_observation()
+                    servo_seq, _, _ = self.robot.get_servo_stats()
 
                 # Process images
                 gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR) # BGR
@@ -521,6 +524,7 @@ class ZmqRos2Leader:
                     if dt >= 2.0:
                         loop_rate = perf_loop_count / dt
                         new_obs_rate = perf_new_obs_count / dt
+                        record_rate = perf_record_count / dt  # Compute recording frequency
                         servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
                         if perf_last_servo_seq is None:
                             servo_rate = None
@@ -531,15 +535,16 @@ class ZmqRos2Leader:
                         servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
                         if servo_rate is None:
                             print(
-                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, record={record_rate:.2f} Hz, servo_age={servo_age_str}"
                             )
                         else:
                             print(
-                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, record={record_rate:.2f} Hz, servo_age={servo_age_str}"
                             )
                         perf_last_print = now
                         perf_loop_count = 0
                         perf_new_obs_count = 0
+                        perf_record_count = 0  # Reset recording counter
 
                 # Wait for spacebar to be pressed and start/stop recording
                 # Spacebar is 32
@@ -662,8 +667,8 @@ class ZmqRos2Leader:
 
                         # Prep joint states as dict
                         if self._recording and self.prev_goal_dict is not None:
-                            current_obs_id = id(observation)
-                            if current_obs_id != last_recorded_obs_id:
+                            current_servo_seq = servo_seq
+                            if current_servo_seq != last_recorded_servo_seq:
                                 joint_states = {
                                     k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
                                 }
@@ -697,7 +702,10 @@ class ZmqRos2Leader:
                                     head_cam_pose=observation.camera_pose,
                                     head_cam_K=observation.camera_K,
                                 )
-                                last_recorded_obs_id = current_obs_id
+                                if self.perf_debug:
+                                    perf_record_count += 1  # Increment recording counter
+                                    print(f'[PERF] recorded servo_seq: {current_servo_seq}')
+                                last_recorded_servo_seq = current_servo_seq
 
                             # Record waypoint
                             if waypoint_key is not None:
