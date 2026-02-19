@@ -85,7 +85,7 @@ class ROS2LfdLeader:
         self._recording = recording
         self.automatic_reset = automatic_reset
         self._recorder = FileDataRecorder(
-            logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
+            logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata, fps=15
         )
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
@@ -386,6 +386,7 @@ class ROS2LfdLeader:
             perf_last_print = time.perf_counter()
             perf_loop_count = 0
             perf_new_obs_count = 0
+            perf_record_count = 0  # Track number of recordings
             perf_last_obs_id = None
             perf_last_servo_seq = None
         try:
@@ -447,6 +448,7 @@ class ROS2LfdLeader:
                     world_frame=False,
                     blocking=False)
                 
+                # add gated recording
                 if self._recording:
                     # Record episode if enabled
                     observation_dict = {
@@ -479,6 +481,8 @@ class ROS2LfdLeader:
                         head_cam_pose=observations["head_cam_pose"],
                         head_cam_K=observations["HEAD_CAM_K"],
                     )
+                    if self.perf_debug:
+                        perf_record_count += 1  # Increment recording counter
 
                 if self.verbose:
                     loop_timer.mark_end()
@@ -495,6 +499,7 @@ class ROS2LfdLeader:
                     if dt >= 2.0:
                         loop_rate = perf_loop_count / dt
                         new_obs_rate = perf_new_obs_count / dt
+                        record_rate = perf_record_count / dt  # Compute recording frequency
                         servo_seq, _last_time, servo_age = self.robot.get_servo_stats()
                         if perf_last_servo_seq is None:
                             servo_rate = None
@@ -505,25 +510,29 @@ class ROS2LfdLeader:
                         servo_age_str = "N/A" if servo_age_ms is None else f"{servo_age_ms:.1f} ms"
                         if servo_rate is None:
                             print(
-                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo_age={servo_age_str}"
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, record={record_rate:.2f} Hz, servo_age={servo_age_str}"
                             )
                         else:
                             print(
-                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, servo_age={servo_age_str}"
+                                f"[PERF] loop={loop_rate:.2f} Hz, new_obs={new_obs_rate:.2f} Hz, servo={servo_rate:.2f} Hz, record={record_rate:.2f} Hz, servo_age={servo_age_str}"
                             )
                         perf_last_print = now
                         perf_loop_count = 0
                         perf_new_obs_count = 0
+                        perf_record_count = 0  # Reset recording counter
 
 
                 if stop:
-                    if self.record_success:
-                        success = ask_for_input("Was the episode successful?")
-                        print("[LEADER] Writing data to disk with success = ", success)
-                        self._recorder.write(success=success)
+                    if self._recording:
+                        if self.record_success:
+                            success = ask_for_input("Was the episode successful?")
+                            print("[LEADER] Writing data to disk with success = ", success)
+                            self._recorder.write(success=success)
+                        else:
+                            print("[LEADER] Writing data to disk.")
+                            self._recorder.write()
                     else:
-                        print("[LEADER] Writing data to disk.")
-                        self._recorder.write()
+                        print("[LEADER] Not recording. Skipping writing data to disk.")
                     
                     # Reset current_pose for relative motion mode after writing
                     if self.relative_motion:
