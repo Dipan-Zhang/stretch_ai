@@ -85,7 +85,7 @@ class ROS2LfdLeader:
         self._recording = recording
         self.automatic_reset = automatic_reset
         self._recorder = FileDataRecorder(
-            logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata, fps=15
+            logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata, fps=6
         )
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
