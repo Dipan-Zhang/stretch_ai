@@ -7,7 +7,6 @@
 # Some code may be adapted from other open-source works with their respective licenses. Original
 # license information maybe found below, if so.
 
-import json
 import pprint as pp
 import os
 
@@ -15,11 +14,9 @@ import cv2
 import numpy as np
 import torch
 import scipy.spatial.transform as tra
-import liblzfse
 import open3d as o3d 
-from PIL import Image
 import sys
-# from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel
+
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
@@ -31,7 +28,8 @@ import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
 from easydict import EasyDict as edict 
-from stretch.app.lfd.policy_utils import process_vertical_image, unnormalize_gripper, normalize_gripper, ask_for_input
+from stretch.app.lfd.policy_utils import unnormalize_gripper, normalize_gripper, ask_for_input
+
 # policy HACK
 sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
 import utils.dataset_utils as DatasetUtils # type: ignore
@@ -49,53 +47,12 @@ EXECUTE_HORIZON = 15
 SMOOTH_WEIGHT = 0.1  # Favor recent actions
 TRAJ_SCALE = 1.0
 VIEWER_TYPE = "o3d"  # "viser" or "o3d"
-KEYS_FOR_STREAMING = [
-    # # Action Meta
-    # "action_valid",
-    # "action_mean",
-    # "action_std",
-    # "action_norm_max_bound",
-    # "action_norm_min_bound",
-    # "gt_action",
-    # # Dynamics Meta
-    # "state_valid",
-    # "state_mean",
-    # "state_std",
-    # "state_norm_max_bound",
-    # "state_norm_min_bound",
-    # "gt_state",
-    # "state_color",
-    # Sensor Data
-    "language_feature",
-    "color",
-    "color_gripper",
-    "depth",
-    "intrinsics",
-    "intrinsics_gripper",
-    "T_cam0_cam",
-    "T_world_cam",
-    "T_world_grippercam",
-    "start_pos",
-    # "start_state",
-    # History Data
-    # "history_state",
-    # "history_action",
-    # "history_action_rel",
-    # "history_raymap",
-    # "history_raymap_gripper",
-    # "history_visual_feature_patch",
-    # "history_visual_feature_patch_gripper",
-]
-
-# INSTRUCTION = None
-# INSTRUCTION = "carry laptop"
-# INSTRUCTION = "pick up laptop"
-# INSTRUCTION = "open laptop"  # "open laptop"
 INSTRUCTION = "pick up pot and place in box"
 ACTION_DIM = 20
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
-HEAD_GOAL_SIZE = (320, 320) # H,W
+HEAD_GOAL_SIZE = (320, 240) # H,W
 HOME_POS = np.array([-0.025, -0.35, 0.85])
+DEBUG_OFFSET = np.array([0,0.0,0.0])
 
 def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
     """
@@ -366,31 +323,16 @@ class ROS2LfdLeaderEgoasis:
         gripper_cam_pose = observation.ee_camera_pose
         head_cam_pose = observation.camera_pose
 
-        # process images to the target size
-        head_color_resized, head_cam_K_resized = process_vertical_image(head_color_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
-        head_depth_resized, _ = process_vertical_image(head_depth_image, HEAD_GOAL_SIZE[0], HEAD_GOAL_SIZE[1], head_cam_K, cut_mode="top")
-
-        original_height, original_width = gripper_color_image.shape[:2]
-        gripper_color_resized = cv2.resize(gripper_color_image, (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        gripper_depth_resized = cv2.resize(gripper_depth_image,  (GRIPPER_GOAL_SIZE[1], GRIPPER_GOAL_SIZE[0]))
-        gripper_cam_K_resized= gripper_cam_K.copy()
-        scale_x = GRIPPER_GOAL_SIZE[1] / original_width
-        scale_y = GRIPPER_GOAL_SIZE[0] / original_height
-        gripper_cam_K_resized[0, 0] *= scale_x
-        gripper_cam_K_resized[1, 1] *= scale_y
-        gripper_cam_K_resized[0, 2] *= scale_x
-        gripper_cam_K_resized[1, 2] *= scale_y
-
         # Acquire current gripper state
         current_state = process_robot_state(observation, joint_states) # (17,) T_world_gripper, gripper_closure
         obs = {
             "language_instruction": INSTRUCTION,  
-            "observation.images.gripper": gripper_color_resized,  # (240, 320, 3)
-            "observation.depths.gripper": gripper_depth_resized,  # (240, 320)
-            "observation.images.head": head_color_resized,  # (320, 320, 3)
-            "observation.depths.head": head_depth_resized,  # (320, 320)
-            "HEAD_CAM_K": head_cam_K_resized,  # (3, 3)
-            "EE_CAM_K": gripper_cam_K_resized,  # (3, 3)
+            "observation.images.gripper": gripper_color_image,  # (240, 320, 3)
+            "observation.depths.gripper": gripper_depth_image,  # (240, 320)
+            "observation.images.head": head_color_image,  # (320, 320, 3)
+            "observation.depths.head": head_depth_image,  # (320, 320)
+            "HEAD_CAM_K": head_cam_K,  # (3, 3)
+            "EE_CAM_K": gripper_cam_K,  # (3, 3)
             "observation.state": current_state,  # (17), T_world_gripper, gripper_closure = state[:16].reshape(4, 4), state[16:]
             "head_cam_pose": head_cam_pose,  # (4, 4)
             "ee_cam_pose": gripper_cam_pose,  # (4, 4)
@@ -406,7 +348,7 @@ class ROS2LfdLeaderEgoasis:
         gripper_cam_K_resized = obs["EE_CAM_K"].copy()
         T_base_head_cam = obs["head_cam_pose"].copy()  # (4,4)
         T_base_ee_cam = obs["ee_cam_pose"].copy()  # (4,4)
-        latest_action_chunk = outputs["latest_action_chunk"].cpu().numpy().copy()
+        latest_action_chunk = outputs["latest_predicted_action"].cpu().numpy().copy()
 
         current_state_vis = current_state[:16].reshape(4, 4)
         tra_curr_state_vis = current_state_vis[:3, 3]
@@ -581,11 +523,14 @@ class ROS2LfdLeaderEgoasis:
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
+                pos += DEBUG_OFFSET
+                pos[2] = np.clip(pos[2], a_min=-0.8, a_max=0.8)
 
-                history_gripper = obs["observation.state"][16]
-                action_chunk_gripper = outputs["latest_action_chunk"][:, 7].cpu().numpy().copy().astype(np.float32)
-                print(f"===================> {history_gripper:.3f}=, {gripper:.3f}=, {action_chunk_gripper}= ")
-                # breakpoint()
+                # history_gripper = obs["observation.state"][16]
+                # action_chunk_gripper = outputs["latest_action_chunk"][:, 7].cpu().numpy().copy().astype(np.float32)
+                # print(f"===================> {history_gripper:.3f}=, {gripper:.3f}=, {action_chunk_gripper}= ")
+                # # breakpoint()
+                print(f'===================> gripper={gripper}, progress={progress}')
                 gripper = unnormalize_gripper(gripper)
 
                 if self.verbose:
@@ -622,11 +567,10 @@ class ROS2LfdLeaderEgoasis:
                     rot_err_threshold=5,  # Relaxed from 2° to 5° for faster convergence
                     gripper_err_threshold=0.1,
                     world_frame=False,
-                    blocking=True,
+                    blocking=False,
                     )
                 elapsed_time = time.time() - time_inference_start
-                # print(f'===================> action execution time: {elapsed_time:.3f}s')
-                precise_sleep(0.1 - elapsed_time) # sleep for 0.1s to maintain 10Hz loop rate
+                precise_sleep(max(1 / 5 - elapsed_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
 
                 if progress >= PROGRESS_TH:
                     print('task succeed!')
@@ -704,9 +648,9 @@ if __name__ == "__main__":
         policy_kwargs={
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
-            "action_chunk_size": 12,
+            "action_chunk_size": 5,
             "policy_only": True,
-            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pick-and-place_relaction_meta.npz",
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pick-and-place-15hz_actionInworld_statistics.npz",
             "state_meta_fpath": None,
             # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
             "device": args.device,
