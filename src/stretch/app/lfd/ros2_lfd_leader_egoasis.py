@@ -23,7 +23,7 @@ import stretch.utils.loop_stats as lt
 from stretch.agent.zmq_client import HomeRobotZmqClient
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
-from stretch.utils.data_tools.record import FileDataRecorder
+from stretch.utils.data_tools.record_egoasis import FileDataRecorderEgoasis
 import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
@@ -104,6 +104,12 @@ def dict_value_torch2numpy(data_batch: dict, exclude_keys: list = []) -> torch.T
             if value.device != torch.device("cpu"):
                 value = value.cpu()
             data_batch_np[key] = value.numpy()
+        elif isinstance(value, np.ndarray):
+            data_batch_np[key] = value
+        elif isinstance(value, str):
+            data_batch_np[key] = value
+        else:
+            print("[RECORD] missing key:",key, "with value:", value)
     return data_batch_np
 
 class ROS2LfdLeaderEgoasis:
@@ -116,10 +122,10 @@ class ROS2LfdLeaderEgoasis:
         teleop_mode: str = "base_x",
         record_success: bool = False,
         depth_filter_k=None,
-        disable_recording: bool = False,
+        recording: bool = False,
         relative_motion: bool = False,
         run_policy: bool = True,
-        policy_kwargs: dict = 
+        policy_kwargs: edict = 
         {   
             "cfg": None,
             "weight_ckpt": None,
@@ -166,11 +172,9 @@ class ROS2LfdLeaderEgoasis:
                 "policy_kwargs": self.policy_kwargs,
             }
 
-        self._disable_recording = disable_recording
-        self._recording = not self._disable_recording
-        self._need_to_write = False
-        if logging_cfg is not None:
-            self._recorder = FileDataRecorder(
+        self._recording = recording
+        if logging_cfg is not None and self._recording:
+            self._recorder = FileDataRecorderEgoasis(
                 logging_cfg.data_dir, logging_cfg.task_name, logging_cfg.user_name, logging_cfg.env_name, logging_cfg.save_images, self.metadata
             )
         else:
@@ -538,25 +542,16 @@ class ROS2LfdLeaderEgoasis:
                     # loop_timer.mark_end()
                     # loop_timer.pretty_print()
                 
-                # if not self._disable_recording:
-                #     # prepare obs and output dict
-                #     obs_dict_np = dict_value_torch2numpy(obs)
-                #     outputs_dict_np = dict_value_torch2numpy(outputs)
-                    
-                #     self._recorder.add(
-                #         ee_cam_pose=obs["ee_cam_pose"].copy(),
-                #         head_cam_pose=obs["head_cam_pose"].copy(),
-                #         ee_rgb=obs["observation.images.gripper"].copy(),
-                #         ee_depth=obs["observation.depths.gripper"].copy(),
-                #         xyz=np.array([0]),
-                #         quaternion=np.array([0]),
-                #         gripper=0,
-                #         ee_pose=np.array([0]),
-                #         observations=,
-                #         actions=action,
-                #         head_rgb=obs["observation.images.head"],
-                #         head_depth=obs["observation.depths.head"],
-                #     )
+                if self._recording:
+
+                    obs_dict_np = dict_value_torch2numpy(obs)
+                    outputs_dict_np = dict_value_torch2numpy(outputs)
+                    assert obs_dict_np.keys() == obs.keys(), 'observations and outputs keys do not match'
+                    # assert outputs_dict_np.keys() == outputs.keys(), f'observations and outputs {outputs.keys()} shapes do not match'
+                    self._recorder.add(
+                        observations=obs_dict_np,
+                        actions=outputs_dict_np.copy(),
+                    )
 
                 self.go_to_target_pose(
                     target_pos=pos, 
@@ -570,12 +565,30 @@ class ROS2LfdLeaderEgoasis:
                     blocking=False,
                     )
                 elapsed_time = time.time() - time_inference_start
-                precise_sleep(max(1 / 5 - elapsed_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
-
-                if progress >= PROGRESS_TH:
+                sleep_time = 1 / 5 - elapsed_time
+                if sleep_time < 0:
+                    print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
+                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
+                
+                stop = False
+                if action[8] >= PROGRESS_TH:
                     print('task succeed!')
-                    break
+                    stop = True
 
+                
+                if stop:
+                    if self._recording:
+                        if self.record_success:
+                            success = ask_for_input("Was the episode successful?")
+                            print("[LEADER] Writing data to disk with success = ", success)
+                            self._recorder.write(success=success)
+                        else:
+                            print("[LEADER] Writing data to disk.")
+                            self._recorder.write()
+                    else:
+                        print("[LEADER] Not recording. Skipping writing data to disk.")
+                    break
+                    
         finally:
             # Go to initial pose
             if ask_for_input("Confirm go to home pose?"):
@@ -608,7 +621,11 @@ if __name__ == "__main__":
         default="base_x",
         choices=["stationary_base", "rotary_base", "base_x"],
     )
+    parser.add_argument("--recording", action="store_true", default=False, help="Enable recording.")
     parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
+    parser.add_argument("--task_name", type=str, default="default_task")
+    parser.add_argument("--user_name", type=str, default="default_user")
+    parser.add_argument("--env_name", type=str, default="default_env")
     parser.add_argument("--dummy_inference", action="store_true", help="Run visualization only.")
     parser.add_argument("--depth-filter-k", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
@@ -637,6 +654,10 @@ if __name__ == "__main__":
         robot.move_to_manip_posture()
 
     logging_cfg = edict(OmegaConf.load(args.logging_cfg))
+    logging_cfg.task_name = args.task_name
+    logging_cfg.env_name = args.env_name
+    logging_cfg.user_name = args.user_name
+
     policy_cfg = edict(OmegaConf.load(args.policy_cfg))
     policy_cfg.DATA.load_tracks = False
     leader = ROS2LfdLeaderEgoasis(
@@ -644,6 +665,7 @@ if __name__ == "__main__":
         verbose=args.verbose,
         logging_cfg=logging_cfg,
         teleop_mode=args.teleop_mode,
+        recording=args.recording,
         record_success=args.record_success,
         policy_kwargs={
             "cfg": policy_cfg,
