@@ -1702,7 +1702,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         decompress_times["obs_create"] = t_obs_create_end - t_obs_create_start
         
         # Print detailed timing if debug flag is set (only occasionally to avoid spam)
-        if self._servo_seq % 200 == 0:
+        if self._servo_seq % 1000 == 0:
             total_decompress = sum(v for k, v in decompress_times.items() if k not in ["lock", "obs_create"])
             print(f"[SERVO DECOMPRESS] EE RGB={decompress_times.get('ee_rgb', 0)*1000:.2f}ms "
                   f"EE Depth={decompress_times.get('ee_depth', 0)*1000:.2f}ms "

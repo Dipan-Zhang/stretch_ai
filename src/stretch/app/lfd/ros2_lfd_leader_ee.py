@@ -455,7 +455,6 @@ class ROS2LfdLeader:
                     world_frame=False,
                     blocking=False)
                 
-                # add gated recording
                 if self._recording:
                     # Record episode if enabled
                     observation_dict = {
@@ -622,9 +621,9 @@ if __name__ == "__main__":
 
     # override logging config with command line arguments
     logging_cfg = edict(OmegaConf.load(args.logging_cfg))
-    logging_cfg.env_name = args.env_name
     logging_cfg.task_name = args.task_name
     logging_cfg.user_name = args.user_name
+    logging_cfg.env_name = args.env_name
 
     # Zmq client
     robot = HomeRobotZmqClient(
