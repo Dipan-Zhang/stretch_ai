@@ -16,7 +16,6 @@ import numpy as np
 import torch
 import scipy.spatial.transform as tra
 
-from lerobot.common.datasets.push_dataset_to_hub import dobbe_format_rel # type: ignore
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
@@ -25,9 +24,16 @@ from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
 import stretch.app.lfd.visualize_utils as vis_utils
-from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, prepare_state_rel, prepare_state_abs, normalize_gripper, unnormalize_gripper, process_vertical_image, ask_for_input
+from stretch.app.lfd.policy_utils import (
+    load_policy, 
+    prepare_image, 
+    prepare_state_rel, 
+    prepare_state_abs, 
+    normalize_gripper, 
+    unnormalize_gripper, 
+    ask_for_input
+)
 import time
-from PIL import Image
 from scipy.spatial.transform import Rotation as R
 from easydict import EasyDict as edict 
 from omegaconf import OmegaConf
@@ -36,7 +42,7 @@ from omegaconf import OmegaConf
 PROGRESS_TH=0.9
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
-DEBUG_OFFSET = np.array([0,0.06,0.0])
+DEBUG_OFFSET = np.array([0,0.02,0.0])
 HOME_POS = np.array([-0.025, -0.35, 0.85])
 
 class ROS2LfdLeader:
@@ -412,6 +418,7 @@ class ROS2LfdLeader:
                     print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
 
                 action = raw_action[0].tolist() # [n_action, n_dim]
+
                 if self.relative_motion:
                     # Initialize current_pose from observation if not already set (safety check)
                     if self.current_pose is None:
