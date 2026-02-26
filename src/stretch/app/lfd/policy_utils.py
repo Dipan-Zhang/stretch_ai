@@ -15,7 +15,8 @@ import scipy.spatial.transform as tra
 import cv2
 import warnings
 
-
+from stretch.agent.zmq_client import HomeRobotZmqClient
+import time
 # Lazy imports for lerobot policies
 _lerobot_policies = {}
 _lerobot_import_warned = False
@@ -367,3 +368,128 @@ def ask_for_input(prompt: str) -> bool:
             return False
         else:
             print("Please enter 'y' or 'n'")
+
+def dict_value_torch2numpy(data_batch: dict, exclude_keys: list = []) -> torch.Tensor:
+    """
+    convert all the values in the dictionary to numpy arrays
+    Args:
+        data_batch: dict, the data batch
+    Returns:
+        numpy array, the data batch
+    """
+    data_batch_np = {}
+    for key, value in data_batch.items():
+        if key in exclude_keys:
+            continue
+        if isinstance(value, torch.Tensor):
+            if value.device != torch.device("cpu"):
+                value = value.cpu()
+            data_batch_np[key] = value.numpy()
+        elif isinstance(value, np.ndarray):
+            data_batch_np[key] = value
+        elif isinstance(value, str):
+            data_batch_np[key] = value
+        else:
+            print("[RECORD] missing key:",key, "with value:", value)
+    return data_batch_np
+
+
+def go_to_target_pose(
+    robot: HomeRobotZmqClient,
+    target_pos: np.ndarray, 
+    target_quat: np.ndarray, 
+    target_gripper:float, 
+    max_iter_time: int = 0.1, 
+    pos_err_threshold: float = 0.01, 
+    rot_err_threshold: float = 2,
+    gripper_err_threshold: float = 0.05,
+    world_frame: bool = False,
+    blocking: bool = True,
+    verbose: bool = False,
+):
+    """
+    Go to the target pose using the robot's arm and gripper.
+    
+    Args:
+        robot: The robot client
+        target_pos: Target position (3D array)
+        target_quat: Target quaternion (xyzw format)
+        target_gripper: Target gripper value
+        max_iter: Maximum number of iterations (only used when non_blocking=True)
+        pos_err_threshold: Position error threshold in meters
+        rot_err_threshold: Rotation error threshold in degrees
+        world_frame: Whether to use world frame
+        non_blocking: If False, send command once and return True immediately.
+                    If True, loop and check if target is reached.
+        
+    Returns:
+        True if target reached (or command sent when non_blocking=False), False otherwise
+    """
+    # If non_blocking=False, just send the command and return
+    if not blocking:
+        robot.arm_to_ee_pose(
+            pos = target_pos,
+            quat = target_quat,
+            gripper = target_gripper,
+            world_frame = world_frame,
+            reliable = True,
+            blocking = False,
+        )
+        return True
+    
+    # Otherwise, loop and check if target is reached
+    target_rot = R.from_quat(target_quat)
+    
+    # Initialize error values in case max_iter is 0
+    pos_err = float('inf')
+    rot_err_deg = float('inf')
+    
+    start_time = time.time()
+    while time.time() - start_time < max_iter_time:
+        # Get current observation
+        observation = robot.get_servo_observation()
+        joint_states = {
+            k: observation.joint[v] for k, v in HelloStretchIdx.name_to_idx.items()
+        }
+
+        ee_pose = observation.ee_pose
+        current_pos = ee_pose[:3, 3]
+        current_rot = R.from_matrix(ee_pose[:3, :3])
+        current_gripper = joint_states['gripper']
+        
+        # Calculate position error
+        pos_err = np.linalg.norm(current_pos - target_pos)
+        
+        # Calculate rotation error using quaternion distance (more robust than RPY)
+        # This gives the angle between rotations in degrees
+        rot_diff = target_rot.inv() * current_rot
+        rot_err = np.abs(rot_diff.as_rotvec())
+        rot_err_deg = np.linalg.norm(rot_err) * 180 / np.pi
+        
+        # Check if gripper is closed
+        gripper_err = np.abs(current_gripper - target_gripper)
+
+        # Check if target is reached
+        reached = (pos_err < pos_err_threshold) and (rot_err_deg < rot_err_threshold) and (gripper_err < gripper_err_threshold) 
+        if reached:
+            if verbose:
+                print(f"Reached target: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}, time={time.time() - start_time:.3f}s")
+            return True
+        
+        # Move towards target
+        robot.arm_to_ee_pose(
+            pos = target_pos,
+            quat = target_quat,
+            gripper = target_gripper,
+            world_frame = world_frame,
+            reliable = True,
+            blocking = False,
+        )
+        
+        # Add a small delay to allow the robot to move before checking again
+        # This prevents the loop from running too fast and wasting iterations
+        time.sleep(0.05)  # 50ms delay between iterations
+    
+    # Failed to reach target within max_iter
+    print(f"Failed to reach target after {time.time() - start_time:.3f}s: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")
+    return False
