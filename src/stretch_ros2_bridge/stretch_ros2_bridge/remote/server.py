@@ -235,6 +235,8 @@ class ZmqServer(BaseZmqServer):
                 pos=action["ee_pose"]["pos"],
                 quat=quat_cmd, 
                 gripper=gripper_cmd,
+                head_pan=head_pan_cmd,
+                head_tilt=head_tilt_cmd,
                 relative=relative_cmd,
                 blocking=_is_blocking,
                 world_frame=world_frame,
