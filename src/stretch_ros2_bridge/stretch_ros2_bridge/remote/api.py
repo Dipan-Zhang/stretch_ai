@@ -465,7 +465,8 @@ class StretchClient(AbstractRobotClient):
         head_tilt: float = None,
         relative: bool = False,
         world_frame: bool = False,
-        blocking: bool = True
+        blocking: bool = True,
+        debug: bool = False,
     ):
         """Move the arm to a ee pose (cartesian space)
         
@@ -493,7 +494,7 @@ class StretchClient(AbstractRobotClient):
                 relative=relative,
                 blocking=blocking,
                 world_frame=world_frame,
-                debug=True, # TEMP
+                debug=debug,
             )
             
             if not success:

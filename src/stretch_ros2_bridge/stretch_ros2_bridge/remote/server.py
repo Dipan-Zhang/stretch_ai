@@ -222,6 +222,7 @@ class ZmqServer(BaseZmqServer):
             relative_cmd = action.get("relative", False)
             _is_blocking = action.get("blocking", False)
             world_frame = action.get("world_frame", False)
+            debug = action.get("debug", False)
             if "head_to" in action:
                 head_pan_cmd, head_tilt_cmd = action["head_to"]
             else:
@@ -229,15 +230,17 @@ class ZmqServer(BaseZmqServer):
 
             if True: # TEMP
                 print(f"SERVER received COMMAND: ee_pose {action['ee_pose']}, gripper {gripper_cmd}")
-                print(f"SERVER received COMMAND: ee_pose {action['ee_pose']}, gripper {gripper_cmd}")
 
             self.client.arm_to_ee_pose(
                 pos=action["ee_pose"]["pos"],
                 quat=quat_cmd, 
                 gripper=gripper_cmd,
+                head_pan=head_pan_cmd,
+                head_tilt=head_tilt_cmd,
                 relative=relative_cmd,
                 blocking=_is_blocking,
                 world_frame=world_frame,
+                debug=debug,
             )
         elif "head_to" in action:
             # This will send head without anything else
