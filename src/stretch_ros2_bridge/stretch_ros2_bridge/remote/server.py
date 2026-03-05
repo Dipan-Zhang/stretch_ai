@@ -22,16 +22,17 @@ import stretch.utils.logger as logger
 from stretch.core.server import BaseZmqServer
 from stretch.utils.image import adjust_gamma, scale_camera_matrix
 from stretch_ros2_bridge.remote import StretchClient
-
+import timeit
 
 class ZmqServer(BaseZmqServer):
     @override
-    def __init__(self, use_d405: bool = True, *args, **kwargs):
+    def __init__(self, use_d405: bool = True, perf_debug: bool = False, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         # ROS2 client interface
         self.client = StretchClient(d405=use_d405)
         self.use_d405 = use_d405
+        self.perf_debug = perf_debug
 
         # Check if the robot is homed
         if not self.client.is_homed:
@@ -294,19 +295,61 @@ class ZmqServer(BaseZmqServer):
 
     @override
     def get_servo_message(self) -> Dict[str, Any]:
-        if self.use_d405:
-            d405_output = self._get_ee_cam_message()
+        if self.perf_debug:
+            times = {}
+            
+            if self.use_d405:
+                t_start = timeit.default_timer()
+                d405_output = self._get_ee_cam_message()
+                times["d405"] = timeit.default_timer() - t_start
+            else:
+                d405_output = {}
+
+            t_start = timeit.default_timer()
+            obs = self.client.get_observation(compute_xyz=False)
+            times["get_obs"] = timeit.default_timer() - t_start
+            
+            t_start = timeit.default_timer()
+            head_color_image, head_depth_image = self._rescale_color_and_depth(
+                obs.rgb, obs.depth, self.image_scaling
+            )
+            times["rescale"] = timeit.default_timer() - t_start
+            
+            head_depth_image = (head_depth_image * 1000).astype(np.uint16)
+            t_start = timeit.default_timer()
+            compressed_head_depth_image = compression.to_jp2(head_depth_image)
+            times["compress_head_depth"] = timeit.default_timer() - t_start
+            
+            t_start = timeit.default_timer()
+            compressed_head_color_image = compression.to_jpg(head_color_image)
+            times["compress_head_rgb"] = timeit.default_timer() - t_start
+            times['d435_time'] = times['get_obs'] + times['rescale'] + times['compress_head_depth'] + times['compress_head_rgb']
+            
+            # Print timing occasionally
+            if hasattr(self, '_servo_msg_count'):
+                self._servo_msg_count += 1
+            else:
+                self._servo_msg_count = 1
+                
+            if self._servo_msg_count % 30 == 0:
+                print(f"[SERVER SERVO MSG] d435_time={times.get('d435_time', 0)*1000:.2f}ms "
+                    f"d405_time={times.get('d405', 0)*1000:.2f}ms "
+                    f"total_time={(sum(times.values()))*1000:.2f}ms, avg freq = {1/(sum(times.values())):.2f} Hz")
         else:
-            d405_output = {}
+            if self.use_d405:
+                d405_output = self._get_ee_cam_message()
+            else:
+                d405_output = {}
 
-        obs = self.client.get_observation(compute_xyz=False)
-        head_color_image, head_depth_image = self._rescale_color_and_depth(
-            obs.rgb, obs.depth, self.image_scaling
-        )
-        head_depth_image = (head_depth_image * 1000).astype(np.uint16)
-        compressed_head_depth_image = compression.to_jp2(head_depth_image)
-        compressed_head_color_image = compression.to_jpg(head_color_image)
+            obs = self.client.get_observation(compute_xyz=False)
+            head_color_image, head_depth_image = self._rescale_color_and_depth(
+                obs.rgb, obs.depth, self.image_scaling
+            )
 
+            head_depth_image = (head_depth_image * 1000).astype(np.uint16)
+            compressed_head_depth_image = compression.to_jp2(head_depth_image)
+            compressed_head_color_image = compression.to_jpg(head_color_image)
+        
         message = {
             "ee/pose": self.client.ee_pose,
             "head_cam/color_camera_K": scale_camera_matrix(
@@ -333,15 +376,15 @@ class ZmqServer(BaseZmqServer):
 @click.option("--send_port", default=4401, help="Port to send observations to")
 @click.option("--recv_port", default=4402, help="Port to receive actions from")
 @click.option("--local", is_flag=True, help="Run code locally on the robot.")
-@click.option("--image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
-@click.option("--ee_image_scaling", default=1.0, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
+@click.option("--ee_image_scaling", default=0.5, help="Image scaling factor") # change to 1.0 to get full res images
 
 def main(
     send_port: int = 4401,
     recv_port: int = 4402,
     local: bool = False,
-    image_scaling: float = 1.0,
-    ee_image_scaling: float = 1.0, 
+    image_scaling: float = 0.5,
+    ee_image_scaling: float = 0.5, 
 ):
     rclpy.init()
     server = ZmqServer(
