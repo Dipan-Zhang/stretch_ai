@@ -28,7 +28,9 @@ import stretch.app.lfd.visualize_utils as vis_utils
 import argparse
 from omegaconf import OmegaConf
 from easydict import EasyDict as edict 
-from stretch.app.lfd.policy_utils import unnormalize_gripper, normalize_gripper, ask_for_input, dict_value_torch2numpy, go_to_target_pose
+from stretch.app.lfd.policy_utils import (
+    unnormalize_gripper, normalize_gripper, ask_for_input, dict_value_torch2numpy, go_to_target_pose, precise_sleep, precise_wait
+)
 
 # policy HACK
 sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
@@ -51,32 +53,10 @@ INSTRUCTION = "pick up pot and place in box"
 ACTION_DIM = 20
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
-HOME_POS = np.array([-0.025, -0.35, 0.85])
-DEBUG_OFFSET = np.array([0,0.0,0.0])
+HOME_POS = np.array([0.0, -0.35, 0.85])
+DEBUG_OFFSET = np.array([0.0,0.0,0.0])
 
-def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
-    """
-    Use hybrid of time.sleep and spinning to minimize jitter.
-    Sleep dt - slack_time seconds first, then spin for the rest.
-    """
-    t_start = time_func()
-    if dt > slack_time:
-        time.sleep(dt - slack_time)
-    t_end = t_start + dt
-    while time_func() < t_end:
-        pass
-    return
 
-def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic):
-    t_start = time_func()
-    t_wait = t_end - t_start
-    if t_wait > 0:
-        t_sleep = t_wait - slack_time
-        if t_sleep > 0:
-            time.sleep(t_sleep)
-        while time_func() < t_end:
-            pass
-    return
 
 def process_robot_state(observation: dict, joint_states) -> np.ndarray:
     # return state in format (17,) T_world_gripper, gripper_closure

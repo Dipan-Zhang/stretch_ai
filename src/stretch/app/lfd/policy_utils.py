@@ -17,6 +17,9 @@ import warnings
 
 from stretch.agent.zmq_client import HomeRobotZmqClient
 import time
+from scipy.spatial.transform import Rotation as R
+from stretch.motion.kinematics import HelloStretchIdx
+
 # Lazy imports for lerobot policies
 _lerobot_policies = {}
 _lerobot_import_warned = False
@@ -31,23 +34,23 @@ def _lazy_import_lerobot_policy(policy_name: str):
     
     try:
         if policy_name == "act":
-            from lerobot.common.policies.act.modeling_act import ACTPolicy
+            from lerobot.common.policies.act.modeling_act import ACTPolicy # type: ignore
             _lerobot_policies[policy_name] = ACTPolicy
             return ACTPolicy
         elif policy_name == "diffusion":
-            from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+            from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy # type: ignore
             _lerobot_policies[policy_name] = DiffusionPolicy
             return DiffusionPolicy
         elif policy_name == "diffusion_depth":
-            from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth
+            from lerobot.common.policies.diffusion_depth.modeling_diffusion import DiffusionPolicy as DPdepth # type: ignore
             _lerobot_policies[policy_name] = DPdepth
             return DPdepth
         elif policy_name == "vqbet":
-            from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
+            from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTPolicy # type: ignore
             _lerobot_policies[policy_name] = VQBeTPolicy
             return VQBeTPolicy
         elif policy_name == "dummy":
-            from lerobot.common.policies.dummy_policy import DummyPolicy
+            from lerobot.common.policies.dummy_policy import DummyPolicy # type: ignore
             _lerobot_policies[policy_name] = DummyPolicy
             return DummyPolicy
         else:
@@ -432,7 +435,7 @@ def go_to_target_pose(
             quat = target_quat,
             gripper = target_gripper,
             world_frame = world_frame,
-            reliable = True,
+            reliable = False,
             blocking = False,
         )
         return True
@@ -493,3 +496,29 @@ def go_to_target_pose(
     # Failed to reach target within max_iter
     print(f"Failed to reach target after {time.time() - start_time:.3f}s: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")
     return False
+
+
+def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
+    """
+    Use hybrid of time.sleep and spinning to minimize jitter.
+    Sleep dt - slack_time seconds first, then spin for the rest.
+    """
+    t_start = time_func()
+    if dt > slack_time:
+        time.sleep(dt - slack_time)
+    t_end = t_start + dt
+    while time_func() < t_end:
+        pass
+    return
+
+
+def precise_wait(t_end: float, slack_time: float=0.001, time_func=time.monotonic):
+    t_start = time_func()
+    t_wait = t_end - t_start
+    if t_wait > 0:
+        t_sleep = t_wait - slack_time
+        if t_sleep > 0:
+            time.sleep(t_sleep)
+        while time_func() < t_end:
+            pass
+    return

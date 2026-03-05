@@ -32,18 +32,23 @@ from stretch.app.lfd.policy_utils import (
     normalize_gripper, 
     unnormalize_gripper, 
     ask_for_input,
-    go_to_target_pose
+    go_to_target_pose,
+    precise_sleep,
 )
 import time
 from scipy.spatial.transform import Rotation as R
 from easydict import EasyDict as edict 
 from omegaconf import OmegaConf
-
+import sys
+import open3d as o3d
+# policy HACK
+sys.path.append("/home/chenh/hanzhi_ws/egoasis3D")
+import utils.dataset_utils as DatasetUtils # type: ignore
 
 PROGRESS_TH=0.9
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
-DEBUG_OFFSET = np.array([0,0.02,0.0])
+DEBUG_OFFSET = np.array([0,0.0,0.0])
 HOME_POS = np.array([-0.025, -0.35, 0.85])
 
 class ROS2LfdLeader:
@@ -64,7 +69,6 @@ class ROS2LfdLeader:
         record_success: bool = True,
         automatic_reset: bool = False,
         visualize: bool = False,
-        perf_debug: bool = False,
 
     ):
         self.robot = robot
@@ -76,7 +80,6 @@ class ROS2LfdLeader:
         self.depth_filter_k = depth_filter_k
         self.record_success = record_success
         self.verbose = verbose
-        self.perf_debug = perf_debug
         # Save metadata to pass to recorder
         self.metadata = {
             "recording_type": "Policy evaluation",
@@ -98,7 +101,7 @@ class ROS2LfdLeader:
         self.policy.reset()
         if policy_name == "dummy":
             self.policy.set_parameters(param_dict={
-                "chunk_size": 8,
+                "chunk_size": 15,
                 "action_type": "real" # real or fake
             })
         self.relative_motion = relative_motion
@@ -162,12 +165,12 @@ class ROS2LfdLeader:
         head_color_resized_ts = prepare_image(head_color_image, self.device)
         gripper_cam_K_resized = gripper_cam_K
         head_cam_K_resized = head_cam_K
-    
+        # current_state.fill_(0)
         obs = {
             "observation.state": current_state,  # (17), T_world_gripper, gripper_closure = state[:16].reshape(4, 4), state[16:]
             "observation.images.gripper": gripper_color_resized_ts,  # (1, 3, 240, 320)
             # "observation.depths.gripper": gripper_depth_resized,  # (240, 320)
-            "observation.images.head": head_color_resized_ts,  # (1, 3, 320, 320)
+            # "observation.images.head": head_color_resized_ts,  # (1, 3, 320, 320)
             # "observation.depths.head": head_depth_resized,  # (320, 320)
             "HEAD_CAM_K": head_cam_K_resized,  # (3, 3)
             "EE_CAM_K": gripper_cam_K_resized,  # (3, 3)
@@ -183,7 +186,7 @@ class ROS2LfdLeader:
         }
         return obs
 
-    def visualize_action(self, obs, action_chunk, visualize_3d: bool = False):
+    def visualize_action(self, obs, outputs, visualize_3d: bool = False):
         # current_state = obs["observation.state"].copy()
         head_color_resized = obs["images.head"].copy() # (320, 320, 3)
         gripper_color_resized = obs["images.gripper"].copy() # (240, 320, 3)
@@ -191,7 +194,7 @@ class ROS2LfdLeader:
         gripper_cam_K_resized = obs["EE_CAM_K"].copy()
         T_base_head_cam = obs["head_cam_pose"].copy()  # (4,4)
         T_base_ee_cam = obs["ee_cam_pose"].copy()  # (4,4)
-        latest_action_chunk = action_chunk[:,0,:].cpu().numpy()
+        latest_action_chunk = outputs["latest_predicted_action"].cpu().numpy().copy()[:, 0]
 
         # current_state_vis = current_state[:16].reshape(4, 4)
         # tra_curr_state_vis = current_state_vis[:3, 3]
@@ -211,44 +214,29 @@ class ROS2LfdLeader:
 
         ######## DEBUG: Do 3D visualization ########
         if visualize_3d:
-            # pred_action_latest = action_chunk.cpu().numpy().copy()
-            # history_action_abs = obs["history_action_abs"][0].cpu().numpy().copy() # [H, D]
-            # start_pos_world = obs["start_pos_world"][0].cpu().numpy().copy()[None] # [1, D]
-            # assert history_action_abs.shape[1] == 20
-            # history_action_right = history_action_abs[:, 10:]
+            pred_action_latest = latest_action_chunk          
+            points_3d, scene_ids = DatasetUtils.backproject(obs["depths.head"], 
+                                                obs["HEAD_CAM_K"], 
+                                                obs["depths.head"] < 1.5, 
+                                                NOCS_convention=False)
+            T_world_head_cam = obs["head_cam_pose"].copy()
+            points_world = DatasetUtils.transform_points(points_3d, T_world_head_cam)
+            points_colors = obs["images.head"][scene_ids[0], scene_ids[1]] / 255.0
+            pcd = DatasetUtils.visualize_points(points_world, points_colors)
 
-            
-            # points_3d, scene_ids = DatasetUtils.backproject(obs["observation.depths.head"], 
-            #                                     obs["HEAD_CAM_K"], 
-            #                                     obs["observation.depths.head"] < 1.5, 
-            #                                     NOCS_convention=False)
-            # T_world_head_cam = obs["head_cam_pose"].copy()
-            # points_world = DatasetUtils.transform_points(points_3d, T_world_head_cam)
-            # points_colors = obs["observation.images.head"][scene_ids[0], scene_ids[1]] / 255.0
-            # pcd = DatasetUtils.visualize_points(points_world, points_colors)
-
-            # root_action_history = DatasetUtils.get_root_transformation(history_action_right)
-            # tra_action_latest = pred_action_latest[:, :3] # [H, 3]
-            # quat_action_latest = pred_action_latest[:, 3:7] # [H, 4]
-            # rot_action_latest = R.from_quat(quat_action_latest).as_matrix() # [H, 3, 3]
-            # root_action_latest = np.eye(4)[None].repeat(tra_action_latest.shape[0], axis=0)
-            # root_action_latest[:, :3, 3] = tra_action_latest
-            # root_action_latest[:, :3, :3] = rot_action_latest
-            # curr_pos_world = DatasetUtils.visualize_sphere_o3d(start_pos_world[0, :3], [0, 1, 0], size=0.02)
-            # vis_action_latest = DatasetUtils.visualize_6d_trajectory(
-            #     root_action_latest,
-            #     size=0.01,
-            #     cmap_name=cmap_name,
-            #     to_mesh=True,
-            # )
-            # vis_action_history = DatasetUtils.visualize_6d_trajectory(
-            #     root_action_history,
-            #     size=0.01,
-            #     cmap_name="hot",
-            #     to_mesh=True,
-            #     )
-            # o3d.visualization.draw([pcd, vis_action_latest, vis_action_history, curr_pos_world])
-            pass
+            tra_action_latest = pred_action_latest[:, :3] # [H, 3]
+            quat_action_latest = pred_action_latest[:, 3:7] # [H, 4]
+            rot_action_latest = R.from_quat(quat_action_latest).as_matrix() # [H, 3, 3]
+            root_action_latest = np.eye(4)[None].repeat(tra_action_latest.shape[0], axis=0)
+            root_action_latest[:, :3, 3] = tra_action_latest
+            root_action_latest[:, :3, :3] = rot_action_latest
+            vis_action_latest = DatasetUtils.visualize_6d_trajectory(
+                root_action_latest,
+                size=0.01,
+                cmap_name=cmap_name,
+                to_mesh=True,
+            )
+            o3d.visualization.draw([pcd, vis_action_latest])
         ######## DEBUG: Do 3D visualization ########
         else:
             assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
@@ -290,7 +278,7 @@ class ROS2LfdLeader:
         if not ask_for_input("Start mission? "):
             return
 
-        if self.perf_debug:
+        if self.verbose:
             perf_last_print = time.perf_counter()
             perf_loop_count = 0
             perf_new_obs_count = 0
@@ -300,11 +288,12 @@ class ROS2LfdLeader:
         try:
             while True:
                 loop_timer.mark_start()
+                loop_start_time = time.time()
 
                 action = None
                 observations = self.prepare_observation()
                 servo_seq, _, _ = self.robot.get_servo_stats()
-                if self.perf_debug:
+                if self.verbose:
                     perf_loop_count += 1
                     if perf_last_obs_id is None or servo_seq != perf_last_obs_id:
                         perf_new_obs_count += 1
@@ -314,10 +303,10 @@ class ROS2LfdLeader:
                 time_before_inference = time.time()
                 with torch.inference_mode():
                     raw_action, full_actions = self.policy.select_action(observations, return_full_actions=True) # relative cartesian pose xyz, quaternion wxyz
-
+                outputs = {
+                    "latest_predicted_action": full_actions,
+                }
                 time_after_inference = time.time()
-                if self.perf_debug:
-                    print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
 
                 action = raw_action[0].tolist() # [n_action, n_dim]
 
@@ -344,8 +333,9 @@ class ROS2LfdLeader:
                     pos += DEBUG_OFFSET 
 
                 if self.visualize:
-                    self.visualize_action(observations, full_actions, visualize_3d=False)
+                    self.visualize_action(observations, outputs, visualize_3d=True)
     
+                time_after_vis = time.time()
                 print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
                 go_to_target_pose(
                     self.robot,
@@ -357,7 +347,7 @@ class ROS2LfdLeader:
                     rot_err_threshold=2, 
                     world_frame=False,
                     blocking=False)
-                
+                time_after_go_to_target = time.time()
                 if self._recording:
                     # Record episode if enabled
                     observation_dict = {
@@ -390,19 +380,12 @@ class ROS2LfdLeader:
                         head_cam_pose=observations["head_cam_pose"],
                         head_cam_K=observations["HEAD_CAM_K"],
                     )
-                    if self.perf_debug:
+                    if self.verbose:
                         perf_record_count += 1  # Increment recording counter
 
+                time_after_sending_commands = time.time()
+                
                 if self.verbose:
-                    loop_timer.mark_end()
-                    loop_timer.pretty_print()
-                    
-                stop = False
-                if action[8] >= PROGRESS_TH:
-                    print('task succeed!')
-                    stop = True
-
-                if self.perf_debug:
                     now = time.perf_counter()
                     dt = now - perf_last_print
                     if dt >= 2.0:
@@ -429,7 +412,26 @@ class ROS2LfdLeader:
                         perf_loop_count = 0
                         perf_new_obs_count = 0
                         perf_record_count = 0  # Reset recording counter
+                    loop_timer.mark_end()
+                    loop_timer.pretty_print()
+                    print(f'inference time: {time_after_inference - time_before_inference:.3f}s')
+                    print(f'visualization time: {time_after_vis - time_after_inference:.3f}s')
+                    print(f'go to target pose time: {time_after_go_to_target - time_after_vis:.3f}s')
+                    print(f'sending commands time: {time_after_sending_commands - time_after_go_to_target:.3f}s')
+                
+                elapsed_time = time.time() -  loop_start_time
+                sleep_time = 1 / 15 - elapsed_time
+                if sleep_time < 0:
+                    print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
+                else: 
+                    print(f'sleeping for {sleep_time:.3f}s to maintain 15Hz loop rate')
+                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
 
+
+                stop = False
+                if action[8] >= PROGRESS_TH:
+                    print('task succeed!')
+                    stop = True
 
                 if stop:
                     if self._recording:
@@ -515,7 +517,6 @@ if __name__ == "__main__":
     parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
     parser.add_argument("--automatic_reset", action="store_true", default=False, help="Automatic reset position and restart mission.")
     parser.add_argument("--visualize", action="store_true", help="Use relative motion.")
-    parser.add_argument("--perf_debug", action="store_true", help="Enable performance debugging.")
     args = parser.parse_args()
 
     # Parameters
@@ -551,7 +552,6 @@ if __name__ == "__main__":
         relative_motion=args.relative_motion,
         automatic_reset=args.automatic_reset,
         visualize=args.visualize,
-        perf_debug=args.perf_debug
     )
 
     try:
