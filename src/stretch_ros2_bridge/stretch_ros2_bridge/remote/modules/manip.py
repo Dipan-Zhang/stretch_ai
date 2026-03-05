@@ -227,10 +227,6 @@ class StretchManipulationClient(AbstractControlModule):
                 arm_success = np.allclose(joint_err[:3], 0.0, atol=JOINT_POS_TOL)
                 wrist_success = np.allclose(joint_err[3:], 0.0, atol=JOINT_ANG_TOL)
                 all_success = arm_success and wrist_success
-                if not (all_success):
-                    print("Warning: Joint goal not achieved.")
-                else:
-                    print('desired Joint goal reached!')
 
                 # Debug print
                 if debug:
