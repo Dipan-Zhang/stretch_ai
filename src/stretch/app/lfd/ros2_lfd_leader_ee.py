@@ -101,7 +101,7 @@ class ROS2LfdLeader:
         self.policy.reset()
         if policy_name == "dummy":
             self.policy.set_parameters(param_dict={
-                "chunk_size": 15,
+                "chunk_size": 10,
                 "action_type": "real" # real or fake
             })
         self.relative_motion = relative_motion
@@ -333,7 +333,7 @@ class ROS2LfdLeader:
                     pos += DEBUG_OFFSET 
 
                 if self.visualize:
-                    self.visualize_action(observations, outputs, visualize_3d=True)
+                    self.visualize_action(observations, outputs, visualize_3d=False)
     
                 time_after_vis = time.time()
                 print(f'[LEADER] action is {pos=}, quat={quat}, gripper={gripper}, progress={action[8]}')
@@ -420,7 +420,7 @@ class ROS2LfdLeader:
                     print(f'sending commands time: {time_after_sending_commands - time_after_go_to_target:.3f}s')
                 
                 elapsed_time = time.time() -  loop_start_time
-                sleep_time = 1 / 15 - elapsed_time
+                sleep_time = 1 / 10 - elapsed_time
                 if sleep_time < 0:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
                 else: 

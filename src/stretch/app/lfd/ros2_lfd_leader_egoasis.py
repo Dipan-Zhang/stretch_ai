@@ -49,7 +49,6 @@ EXECUTE_HORIZON = 15
 SMOOTH_WEIGHT = 0.1  # Favor recent actions
 TRAJ_SCALE = 1.0
 VIEWER_TYPE = "o3d"  # "viser" or "o3d"
-INSTRUCTION = "pick up pot and place in box"
 ACTION_DIM = 20
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
@@ -104,9 +103,8 @@ class ROS2LfdLeaderEgoasis:
 
         # Save metadata to pass to recorder
         if logging_cfg is not None:
-            if INSTRUCTION is not None:
-                logging_cfg.task_name = INSTRUCTION.replace(" ", "_")
-            
+            instruction = logging_cfg.instruction
+            logging_cfg.task_name = instruction.replace(" ", "_")
             self.metadata = {
                 "backend": "ros2",
                 "recording_type": "Policy evaluation",
@@ -122,7 +120,7 @@ class ROS2LfdLeaderEgoasis:
                 "backend": "ros2",
                 "recording_type": "Policy evaluation",
                 "user_name": "unknown",
-                "task_name": INSTRUCTION.replace(" ", "_") if INSTRUCTION is not None else "unknown",
+                "task_name": logging_cfg.task_name if logging_cfg.task_name is not None else "unknown",
                 "env_name": "unknown",
                 "policy_name": 'egoasis',
                 "teleop_mode": self.teleop_mode,
@@ -157,6 +155,7 @@ class ROS2LfdLeaderEgoasis:
         self._run_policy = run_policy
         self.dummy_inference = not self._run_policy
         self.current_pose = None
+        self.logging_cfg = logging_cfg
 
         if self.dummy_inference:
             raise NotImplementedError("dummy_inference is not implemented yet")
@@ -187,7 +186,7 @@ class ROS2LfdLeaderEgoasis:
         # Acquire current gripper state
         current_state = process_robot_state(observation, joint_states) # (17,) T_world_gripper, gripper_closure
         obs = {
-            "language_instruction": INSTRUCTION,  
+            "language_instruction": self.logging_cfg.instruction,  
             "observation.images.gripper": gripper_color_image,  # (240, 320, 3)
             "observation.depths.gripper": gripper_depth_image,  # (240, 320)
             "observation.images.head": head_color_image,  # (320, 320, 3)
@@ -223,15 +222,15 @@ class ROS2LfdLeaderEgoasis:
         gripper_cam_for_vis = gripper_color_resized
         closure = latest_action_chunk[0, 7]
         if closure < 0.5:
-            cmap_name = "turbo"
-        else:
             cmap_name = "cool"
+        else:
+            cmap_name = "turbo"
 
         ######## DEBUG: Do 3D visualization ########
         if visualize_3d:
             pred_action_latest = outputs["latest_predicted_action"].cpu().numpy().copy()
-            history_action_abs = obs["history_action_abs"][0].cpu().numpy().copy() # [H, D]
-            start_pos_world = obs["start_pos_world"][0].cpu().numpy().copy()[None] # [1, D]
+            history_action_abs = obs["history_action"][0].cpu().numpy().copy() # [H, D]
+            start_pos_world = obs["start_pos"][0].cpu().numpy().copy()[None] # [1, D]
             assert history_action_abs.shape[1] == 20
             history_action_right = history_action_abs[:, 10:]
 
@@ -252,7 +251,12 @@ class ROS2LfdLeaderEgoasis:
             root_action_latest = np.eye(4)[None].repeat(tra_action_latest.shape[0], axis=0)
             root_action_latest[:, :3, 3] = tra_action_latest
             root_action_latest[:, :3, :3] = rot_action_latest
-            curr_pos_world = DatasetUtils.visualize_sphere_o3d(start_pos_world[0, :3], [0, 1, 0], size=0.02)
+            curr_pos_world = start_pos_world[0, 10:13]
+            curr_rot_world = AriaUtils.rotation_6d_to_matrix(torch.from_numpy(start_pos_world[:, -6:])).numpy()[0]
+            curr_pose_world = np.eye(4)
+            curr_pose_world[:3, 3] = curr_pos_world
+            curr_pose_world[:3, :3] = curr_rot_world
+            curr_pose_world_vis = DatasetUtils.visualize_axis_o3d(curr_pose_world, [0, 1, 0], size=0.02)
             vis_action_latest = DatasetUtils.visualize_6d_trajectory(
                 root_action_latest,
                 size=0.01,
@@ -262,10 +266,13 @@ class ROS2LfdLeaderEgoasis:
             vis_action_history = DatasetUtils.visualize_6d_trajectory(
                 root_action_history,
                 size=0.01,
-                cmap_name="hot",
+                cmap_name="Greens",
                 to_mesh=True,
                 )
-            o3d.visualization.draw([pcd, vis_action_latest, vis_action_history, curr_pos_world])
+            o3d.visualization.draw([pcd, vis_action_latest, vis_action_history, curr_pose_world_vis])
+
+            cv2.imshow("gripper image", cv2.cvtColor(gripper_cam_for_vis, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(0)
         ######## DEBUG: Do 3D visualization ########
         else:
             assert len(latest_action_chunk.shape) == 2, 'latest_action_chunk should be a 2D array'
@@ -321,18 +328,21 @@ class ROS2LfdLeaderEgoasis:
     
         self.robot.reset_manipulation_base_pose()
         print('reset robot manip base pose!')
+        # obs = self.prepare_observation()
+        # print(obs["observation.state"][:16].reshape(4, 4))
+        # breakpoint()
 
         # Go to initial pose
-        self.robot_standby()
+        # self.robot_standby()
 
-        # Warm up the policy
-        for i in range(10):
-            obs = self.prepare_observation()
-            with torch.inference_mode():
-                self.policy.inference(obs, action_only=True)
-                self.policy.reset()
-        self.policy.reset()
-        time_episode_start = time.time()
+        # # Warm up the policy
+        # for i in range(3):
+        #     obs = self.prepare_observation()
+        #     with torch.inference_mode():
+        #         self.policy.inference(obs, action_only=True)
+        #         self.policy.reset()
+        # self.policy.reset()
+        # time_episode_start = time.time()
 
         try:
             # Take keyboard input to start the mission, otherwise the robot will be in standby mode
@@ -385,23 +395,14 @@ class ROS2LfdLeaderEgoasis:
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
                 # print(f'===================> inference time: {time.time() - time_start:.3f}s')
                 pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
-                pos += DEBUG_OFFSET
-                pos[2] = np.clip(pos[2], a_min=-0.8, a_max=0.8)
 
                 # history_gripper = obs["observation.state"][16]
                 # action_chunk_gripper = outputs["latest_action_chunk"][:, 7].cpu().numpy().copy().astype(np.float32)
                 # print(f"===================> {history_gripper:.3f}=, {gripper:.3f}=, {action_chunk_gripper}= ")
-                # # breakpoint()
                 print(f'===================> gripper={gripper}, progress={progress}')
                 gripper = unnormalize_gripper(gripper)
 
-                if self.verbose:
-                    self.visualize_action(obs, outputs, visualize_3d=False)
-                    # loop_timer.mark_end()
-                    # loop_timer.pretty_print()
-                
                 if self._recording:
-
                     obs_dict_np = dict_value_torch2numpy(obs)
                     outputs_dict_np = dict_value_torch2numpy(outputs)
                     assert obs_dict_np.keys() == obs.keys(), 'observations and outputs keys do not match'
@@ -424,7 +425,7 @@ class ROS2LfdLeaderEgoasis:
                     blocking=False,
                     )
                 elapsed_time = time.time() - time_inference_start
-                sleep_time = 1 / 5 - elapsed_time
+                sleep_time = 1 / 10 - elapsed_time
                 if sleep_time < 0:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
                 precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
@@ -434,21 +435,34 @@ class ROS2LfdLeaderEgoasis:
                     print('task succeed!')
                     stop = True
 
+                if self.verbose:
+                    self.visualize_action(obs, outputs, visualize_3d=False)
+
                 
-                if stop:
-                    if self._recording:
-                        if self.record_success:
-                            success = ask_for_input("Was the episode successful?")
-                            print("[LEADER] Writing data to disk with success = ", success)
-                            self._recorder.write(success=success)
-                        else:
-                            print("[LEADER] Writing data to disk.")
-                            self._recorder.write()
-                    else:
-                        print("[LEADER] Not recording. Skipping writing data to disk.")
-                    break
+                # if stop:
+                #     if self._recording:
+                #         if self.record_success:
+                #             success = ask_for_input("Was the episode successful?")
+                #             print("[LEADER] Writing data to disk with success = ", success)
+                #             self._recorder.write(success=success)
+                #         else:
+                #             print("[LEADER] Writing data to disk.")
+                #             self._recorder.write()
+                #     else:
+                #         print("[LEADER] Not recording. Skipping writing data to disk.")
+                #     break
                     
         finally:
+            if self._recording:
+                if self.record_success:
+                    success = ask_for_input("Was the episode successful?")
+                    print("[LEADER] Writing data to disk with success = ", success)
+                    self._recorder.write(success=success)
+                else:
+                    print("[LEADER] Writing data to disk.")
+                    self._recorder.write()
+            else:
+                print("[LEADER] Not recording. Skipping writing data to disk.")
             # Go to initial pose
             if ask_for_input("Confirm go to home pose?"):
                 obs = self.robot.get_servo_observation()
@@ -493,6 +507,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
     parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
+    parser.add_argument("--instruction", type=str, default="pick-and-place")
     args = parser.parse_args()
 
     # Parameters
@@ -516,7 +531,7 @@ if __name__ == "__main__":
     logging_cfg.task_name = args.task_name
     logging_cfg.env_name = args.env_name
     logging_cfg.user_name = args.user_name
-
+    logging_cfg.instruction = args.instruction
     policy_cfg = edict(OmegaConf.load(args.policy_cfg))
     policy_cfg.DATA.load_tracks = False
     leader = ROS2LfdLeaderEgoasis(
@@ -529,9 +544,9 @@ if __name__ == "__main__":
         policy_kwargs={
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
-            "action_chunk_size": 5,
+            "action_chunk_size": 10,
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_PnP-Sponge_actionInworld_statistics.npz",
             "policy_only": True,
-            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pick-and-place-15hz_actionInworld_statistics.npz",
             "state_meta_fpath": None,
             # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
             "device": args.device,
