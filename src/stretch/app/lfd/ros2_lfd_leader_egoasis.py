@@ -304,23 +304,7 @@ class ROS2LfdLeaderEgoasis:
             cv2.waitKey(1)
 
 
-    def robot_standby(self):
-        obs_init = self.robot.get_servo_observation()
-        curr_pos = obs_init.ee_pose[:3, 3]
-        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
-        go_to_target_pose(
-            robot=self.robot,
-            target_pos=curr_pos, 
-            target_quat=curr_quat, 
-            target_gripper=0.9, 
-            max_iter_time=2, 
-            pos_err_threshold=0.01, 
-            rot_err_threshold=1, 
-            gripper_err_threshold=0.05,
-            world_frame=False,
-            blocking=True,
-        )
-        time.sleep(0.05)
+
 
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
@@ -331,9 +315,6 @@ class ROS2LfdLeaderEgoasis:
         # obs = self.prepare_observation()
         # print(obs["observation.state"][:16].reshape(4, 4))
         # breakpoint()
-
-        # Go to initial pose
-        # self.robot_standby()
 
         # # Warm up the policy
         # for i in range(3):
@@ -379,7 +360,6 @@ class ROS2LfdLeaderEgoasis:
                     return {}
                 
                 # Keep robot in standby pose
-                self.robot_standby()
                 time.sleep(0.1)  # Small delay to prevent excessive CPU usage
 
             while True:
@@ -480,7 +460,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()  
     parser.add_argument("--policy_cfg", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_wprogres/config.yaml")
     parser.add_argument("--ckpt", type=str, default="/home/chenh/hanzhi_ws/egoasis_dataset/vla_stretch_potpicknplace_wprogres/iter28000.ckpt")
-    parser.add_argument("-i", "--robot_ip", type=str, default="192.168.1.10", help="Robot IP address")
+    parser.add_argument("-i", "--robot_ip", type=str, default="192.168.1.2", help="Robot IP address")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-l", "--logging_cfg", type=str, default="./src/stretch/app/lfd/logging.yaml")
     parser.add_argument(
@@ -495,7 +475,7 @@ if __name__ == "__main__":
         choices=["stationary_base", "rotary_base", "base_x"],
     )
     parser.add_argument("--recording", action="store_true", default=False, help="Enable recording.")
-    parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
+    parser.add_argument("--no-record-success", action="store_true", help="Record success of episode.")
     parser.add_argument("--task_name", type=str, default="default_task")
     parser.add_argument("--user_name", type=str, default="default_user")
     parser.add_argument("--env_name", type=str, default="default_env")
@@ -540,11 +520,11 @@ if __name__ == "__main__":
         logging_cfg=logging_cfg,
         teleop_mode=args.teleop_mode,
         recording=args.recording,
-        record_success=args.record_success,
+        record_success=not args.no_record_success,
         policy_kwargs={
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
-            "action_chunk_size": 10,
+            "action_chunk_size": 15,
             "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_PnP-Sponge_actionInworld_statistics.npz",
             "policy_only": True,
             "state_meta_fpath": None,

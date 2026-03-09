@@ -435,8 +435,9 @@ def go_to_target_pose(
             quat = target_quat,
             gripper = target_gripper,
             world_frame = world_frame,
-            reliable = False,
             blocking = False,
+            timeout = 0.05,
+            reliable = True,
         )
         return True
     
@@ -485,13 +486,14 @@ def go_to_target_pose(
             quat = target_quat,
             gripper = target_gripper,
             world_frame = world_frame,
-            reliable = True,
+            reliable = False,
             blocking = False,
+            debug = True,
         )
         
         # Add a small delay to allow the robot to move before checking again
         # This prevents the loop from running too fast and wasting iterations
-        time.sleep(0.05)  # 50ms delay between iterations
+        # time.sleep(0.05)  # 50ms delay between iterations
     
     # Failed to reach target within max_iter
     print(f"Failed to reach target after {time.time() - start_time:.3f}s: pos_err={pos_err:.4f}m, rot_err={rot_err_deg:.2f}°, gripper_err={gripper_err:.4f}")

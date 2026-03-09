@@ -34,7 +34,20 @@ from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
 from stretch.app.lfd.policy_utils import normalize_gripper, unnormalize_gripper
-HOME_POS = np.array([-0.025, -0.35, 0.85])
+HOME_POS = np.array([-0.025, -0.35, 0.6])
+
+def precise_sleep(dt: float, slack_time: float=0.001, time_func=time.monotonic):
+    """
+    Use hybrid of time.sleep and spinning to minimize jitter.
+    Sleep dt - slack_time seconds first, then spin for the rest.
+    """
+    t_start = time_func()
+    if dt > slack_time:
+        time.sleep(dt - slack_time)
+    t_end = t_start + dt
+    while time_func() < t_end:
+        pass
+    return
 
 class ZmqRos2Leader:
     """Leader class for DexTeleop using the Zmq_client for ROS2 on Stretch"""
@@ -414,7 +427,7 @@ class ZmqRos2Leader:
 
         return new_goal_configuration
 
-    def run(self, display_received_images):
+    def run(self, display_received_images, loop_rate: float = 10.0):
         loop_timer = lt.LoopStats("dex_teleop_leader")
 
         if self.use_clutch:
@@ -458,6 +471,7 @@ class ZmqRos2Leader:
 
         try:
             while True:
+                loop_start_time = time.time()
                 waypoint_key = None
 
                 loop_timer.mark_start()
@@ -719,10 +733,7 @@ class ZmqRos2Leader:
                                     logger.warning(
                                         f"[LEADER] WARNING: overwriting previous waypoint {waypoint_key}."
                                     )
-                    else:
-                        offset_pose = last_robot_pose - robot_pose
-                elif waypoint_key is not None:
-                    print("[LEADER] Recording waypoint failed. Commanded goal_dict was invalid.")
+
 
                 self.prev_goal_dict = goal_dict
 
@@ -741,6 +752,15 @@ class ZmqRos2Leader:
                         self._recorder.write()
                         # self.robot.reset_manipulation_base_pose()
                     self._need_to_write = False
+                
+                elapsed_time = time.time() -  loop_start_time
+                sleep_time = 1 / loop_rate - elapsed_time
+                if sleep_time < 0:
+                    print(f'WARNING!!!!!! ===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
+                else: 
+                    print(f'sleeping for {sleep_time:.3f}s to maintain {loop_rate}Hz loop rate')
+                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
+
 
         finally:
             print("Exiting...")
@@ -788,6 +808,7 @@ if __name__ == "__main__":
     parser.add_argument("--platform", type=str, default="linux", choices=["linux", "not_linux"])
     parser.add_argument("-c", "--clutch", action="store_true")
     parser.add_argument("--teach-grasping", action="store_true")
+    parser.add_argument("--loop_rate", type=int, default=10, help="Loop rate.")
     parser.add_argument("--perf_debug", action="store_true", help="Print loop/servo rates.")
     args = parser.parse_args()
 
@@ -824,7 +845,7 @@ if __name__ == "__main__":
     )
 
     try:
-        leader.run(display_received_images=True)
+        leader.run(display_received_images=True, loop_rate=args.loop_rate)
     except KeyboardInterrupt:
         pass
 

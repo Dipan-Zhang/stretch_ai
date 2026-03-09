@@ -720,6 +720,7 @@ class HomeRobotZmqClient(AbstractRobotClient):
         timeout: float = 5.0,
         verbose: bool = False,
         reliable: bool = True,
+        debug: bool = False,
     ) -> bool:
         """Move the arm to a particular end effector pose in cartesian space
         Args:
@@ -759,10 +760,11 @@ class HomeRobotZmqClient(AbstractRobotClient):
         _next_action["world_frame"] = world_frame
         _next_action["relative"] = relative
         _next_action["manip_blocking"] = blocking
-        self.send_action(_next_action, reliable=reliable)
+        if debug:
+            _next_action["debug"] = True
+        self.send_action(_next_action, timeout=timeout, reliable=reliable)
         # print(f'next action is {_next_action=}')
-        
-
+    
         return True
 
     def move_base_to(
@@ -1562,11 +1564,14 @@ class HomeRobotZmqClient(AbstractRobotClient):
             self._iter = block_id + 1
 
             self.send_message(next_action)
-
+            start_time = time.time()
             while reliable and self._last_step < block_id:
                 # print(next_action)
                 self.send_message(next_action)
+                if time.time() - start_time > timeout:
+                    break
                 time.sleep(0.01)
+
 
             # For tracking goal
             if "xyt" in next_action:

@@ -112,28 +112,6 @@ class ROS2LfdLeader:
         if self.relative_motion:
             assert ('rel' in policy_path) or ('rum' in policy_path), 'Policy path is for relative motion, but relative motion is disabled. Please check the policy path.'
 
-    def robot_standby(self):
-        "run few empty actions to let the robot stand by"
-        obs_init = self.robot.get_servo_observation()
-        curr_pos = obs_init.ee_pose[:3, 3]
-        curr_quat = R.from_matrix(obs_init.ee_pose[:3, :3]).as_quat()
-        go_to_target_pose(
-            robot=self.robot,
-            target_pos=curr_pos, 
-            target_quat=curr_quat, 
-            target_gripper=0.9, 
-            max_iter_time=0.1, 
-            pos_err_threshold=0.01, 
-            rot_err_threshold=1, 
-            gripper_err_threshold=0.05,
-            world_frame=False,
-            blocking=True,
-        )
-        time.sleep(0.05)
-        
-        # Initialize current_pose for relative motion mode
-        if self.relative_motion:
-            self.current_pose = obs_init.ee_pose.copy()
 
     def prepare_observation(self) -> dict:
         observation = self.robot.get_servo_observation()    
@@ -185,6 +163,9 @@ class ROS2LfdLeader:
             "gripper": normalize_gripper(gripper_joint),
         }
         return obs
+
+
+
 
     def visualize_action(self, obs, outputs, visualize_3d: bool = False):
         # current_state = obs["observation.state"].copy()
@@ -273,11 +254,40 @@ class ROS2LfdLeader:
         loop_timer = lt.LoopStats("lfd_leader_ee")
         self.robot.reset_manipulation_base_pose()
 
-        self.robot_standby()
 
-        if not ask_for_input("Start mission? "):
-            return
+        mission_started = False
+        while not mission_started:
+            # Get observation to show current camera feed
+            obs = self.prepare_observation()
+            head_image = obs["images.head"]
+            gripper_image = obs["images.gripper"]
+            
+            # Create a combined view for standby mode
+            gripper_image_bgr = cv2.cvtColor(gripper_image, cv2.COLOR_RGB2BGR)
+            gripper_resized = cv2.resize(gripper_image_bgr, (320, 240))
 
+            cv2.putText(gripper_resized, "STANDBY - Press SPACE to start", (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
+            
+            cv2.imshow("Standby Mode - Press SPACE to start mission", gripper_resized)
+            
+            # Check for key press
+            key = cv2.waitKey(1) & 0xFF
+            if key == 32:  # SPACEBAR
+                self.policy.reset()
+                time.sleep(0.1)
+                print("Mission started!")
+                mission_started = True
+                cv2.destroyAllWindows()
+                time.sleep(0.1)
+                break
+            
+            elif key == 27:  # ESC
+                print("Mission cancelled by user.")
+                return {}
+            
+            # Keep robot in standby pose
+            time.sleep(0.1)  # Small delay to prevent excessive CPU usage
         if self.verbose:
             perf_last_print = time.perf_counter()
             perf_loop_count = 0
@@ -424,7 +434,7 @@ class ROS2LfdLeader:
                 if sleep_time < 0:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
                 else: 
-                    print(f'sleeping for {sleep_time:.3f}s to maintain 15Hz loop rate')
+                    print(f'sleeping for {sleep_time:.3f}s to maintain 10 Hz loop rate')
                 precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
 
 
@@ -461,7 +471,6 @@ class ROS2LfdLeader:
                         )
                         time.sleep(3.0)
                         if ask_for_input("Confirm reset position and restart mission?"):
-                            self.robot_standby()
                             self.robot.reset_manipulation_base_pose()
                             # current_pose will be reinitialized in robot_standby
                             continue
@@ -514,7 +523,7 @@ if __name__ == "__main__":
     parser.add_argument("--task_name", type=str, default="default_task")
     parser.add_argument("--user_name", type=str, default="default_user")
     parser.add_argument("--env_name", type=str, default="default_env")
-    parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
+    parser.add_argument("--no-record-success", action="store_true", help="Record success of episode.")
     parser.add_argument("--automatic_reset", action="store_true", default=False, help="Automatic reset position and restart mission.")
     parser.add_argument("--visualize", action="store_true", help="Use relative motion.")
     args = parser.parse_args()
@@ -544,6 +553,7 @@ if __name__ == "__main__":
         robot=robot,
         verbose=args.verbose,
         recording=args.recording,
+        record_success=not args.no_record_success,
         logging_cfg=logging_cfg,
         teleop_mode=args.teleop_mode,
         policy_name=args.policy_name,

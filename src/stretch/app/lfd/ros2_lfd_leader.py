@@ -327,7 +327,7 @@ if __name__ == "__main__":
         default="base_x",
         choices=["stationary_base", "rotary_base", "base_x"],
     )
-    parser.add_argument("--record-success", action="store_true", help="Record success of episode.")
+    parser.add_argument("--no-record-success", action="store_true", help="Record success of episode.")
     parser.add_argument(
         "--policy_path", type=str, required=True, help="Path to folder storing model weights"
     )
@@ -365,7 +365,7 @@ if __name__ == "__main__":
         force_execute=args.force,
         save_images=args.save_images,
         teleop_mode=args.teleop_mode,
-        record_success=args.record_success,
+        record_success=not args.no_record_success,
         policy_name=args.policy_name,
         policy_path=args.policy_path,
         device=args.device,
