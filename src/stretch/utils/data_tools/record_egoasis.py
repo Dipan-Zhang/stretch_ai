@@ -177,8 +177,10 @@ class FileDataRecorderEgoasis(FileDataRecorder):
         output_dir.mkdir(exist_ok=True)
         
         for i, (obs_dict, output_dict) in enumerate(zip(self.observations_list, self.outputs_list)):
+            # Filter out keys containing "visual_feature" from obs_dict
+            filtered_obs_dict = {k: v for k, v in obs_dict.items() if "visual_feature" not in k}
             # Use savez_compressed to save dictionaries properly - allows dict-style access when loading
-            np.savez(obs_dir / f"{i:06}.npz", **obs_dict)
+            np.savez(obs_dir / f"{i:06}.npz", **filtered_obs_dict)
             np.savez(output_dir / f"{i:06}.npz", **output_dict)
 
     def write(self, success: Optional[bool] = None):
