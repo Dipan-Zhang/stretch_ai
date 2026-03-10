@@ -12,13 +12,13 @@ import pprint as pp
 import cv2
 import numpy as np
 import torch
-from lerobot.common.datasets.push_dataset_to_hub import dobbe_format
+from lerobot.common.datasets.push_dataset_to_hub import dobbe_format # type: ignore
 
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
 import stretch.utils.logger as logger
 import stretch.utils.loop_stats as lt
 from stretch.agent.zmq_client import HomeRobotZmqClient
-from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state
+from stretch.app.lfd.policy_utils import load_policy, prepare_image, prepare_state, ask_for_input
 from stretch.core import get_parameters
 from stretch.motion.kinematics import HelloStretchIdx
 from stretch.utils.data_tools.record import FileDataRecorder
@@ -79,16 +79,6 @@ class ROS2LfdLeader:
 
         self.policy = load_policy(policy_name, policy_path, device)
         self.policy.reset()
-
-    def ask_for_success(self) -> bool:
-        """Ask the user if the episode was successful."""
-        while True:
-            logger.alert("Was the episode successful? (y/n)")
-            key = cv2.waitKey(0)
-            if key == ord("y"):
-                return True
-            elif key == ord("n"):
-                return False
 
     def run(self, display_received_images: bool = False) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
@@ -289,7 +279,7 @@ class ROS2LfdLeader:
 
                 if self._need_to_write:
                     if self.record_success:
-                        success = self.ask_for_success()
+                        success = ask_for_input("Was the episode successful?")
                         print("[LEADER] Writing data to disk with success = ", success)
                         self._recorder.write(success=success)
                     else:
