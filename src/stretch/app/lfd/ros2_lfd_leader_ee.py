@@ -69,7 +69,7 @@ class ROS2LfdLeader:
         record_success: bool = True,
         automatic_reset: bool = False,
         visualize: bool = False,
-
+        loop_rate: int = 10,
     ):
         self.robot = robot
 
@@ -108,7 +108,7 @@ class ROS2LfdLeader:
         # Track current pose for relative motion mode
         self.current_pose = None
         self.visualize = visualize
-
+        self.loop_rate = loop_rate
         if self.relative_motion:
             assert ('rel' in policy_path) or ('rum' in policy_path), 'Policy path is for relative motion, but relative motion is disabled. Please check the policy path.'
 
@@ -430,12 +430,12 @@ class ROS2LfdLeader:
                     print(f'sending commands time: {time_after_sending_commands - time_after_go_to_target:.3f}s')
                 
                 elapsed_time = time.time() -  loop_start_time
-                sleep_time = 1 / 10 - elapsed_time
+                sleep_time = 1 / self.loop_rate - elapsed_time
                 if sleep_time < 0:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
-                else: 
-                    print(f'sleeping for {sleep_time:.3f}s to maintain 10 Hz loop rate')
-                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
+                # else: 
+                #     print(f'sleeping for {sleep_time:.3f}s to maintain {self.loop_rate} Hz loop rate')
+                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain loop rate
 
 
                 stop = False
@@ -526,6 +526,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-record-success", action="store_true", help="Record success of episode.")
     parser.add_argument("--automatic_reset", action="store_true", default=False, help="Automatic reset position and restart mission.")
     parser.add_argument("--visualize", action="store_true", help="Use relative motion.")
+    parser.add_argument("--loop_rate", type=int, default=10, help="Loop rate in Hz.")
     args = parser.parse_args()
 
     # Parameters
@@ -562,6 +563,7 @@ if __name__ == "__main__":
         relative_motion=args.relative_motion,
         automatic_reset=args.automatic_reset,
         visualize=args.visualize,
+        loop_rate=args.loop_rate,
     )
 
     try:

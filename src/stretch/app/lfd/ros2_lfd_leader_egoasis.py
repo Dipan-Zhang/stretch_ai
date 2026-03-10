@@ -91,7 +91,7 @@ class ROS2LfdLeaderEgoasis:
             "policy_only": True,
             "device": "cuda",
         },
-
+        loop_rate: int = 10,
     ):
         self.robot = robot
         self.policy_kwargs = edict(policy_kwargs)
@@ -100,7 +100,7 @@ class ROS2LfdLeaderEgoasis:
         self.depth_filter_k = depth_filter_k
         self.record_success = record_success
         self.verbose = verbose
-
+        self.loop_rate = loop_rate
         # Save metadata to pass to recorder
         if logging_cfg is not None:
             instruction = logging_cfg.instruction
@@ -332,7 +332,6 @@ class ROS2LfdLeaderEgoasis:
             while not mission_started:
                 # Get observation to show current camera feed
                 obs = self.prepare_observation()
-                head_image = obs["observation.images.head"]
                 gripper_image = obs["observation.images.gripper"]
                 
                 # Create a combined view for standby mode
@@ -341,7 +340,6 @@ class ROS2LfdLeaderEgoasis:
 
                 cv2.putText(gripper_resized, "STANDBY - Press SPACE to start", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
-                
                 cv2.imshow("Standby Mode - Press SPACE to start mission", gripper_resized)
                 
                 # Check for key press
@@ -405,15 +403,15 @@ class ROS2LfdLeaderEgoasis:
                     blocking=False,
                     )
                 elapsed_time = time.time() - time_inference_start
-                sleep_time = 1 / 10 - elapsed_time
+                sleep_time = 1 / self.loop_rate - elapsed_time
                 if sleep_time < 0:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
-                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain 5Hz loop rate
+                precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain loop rate
                 
-                stop = False
-                if action[8] >= PROGRESS_TH:
-                    print('task succeed!')
-                    stop = True
+                # stop = False
+                # if action[8] >= PROGRESS_TH:
+                #     print('task succeed!')
+                #     stop = True
 
                 if self.verbose:
                     self.visualize_action(obs, outputs, visualize_3d=False)
@@ -487,6 +485,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--show-images", action="store_true", help="Show images received by robot.")
     parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
+    parser.add_argument("--loop_rate", type=int, default=10, help="Loop rate in Hz.")
     parser.add_argument("--instruction", type=str, default="pick-and-place")
     args = parser.parse_args()
 
@@ -532,6 +531,7 @@ if __name__ == "__main__":
             "device": args.device,
         },
         relative_motion=args.relative_motion,
+        loop_rate=args.loop_rate,
     )
 
     try:
