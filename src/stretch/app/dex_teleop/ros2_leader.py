@@ -239,9 +239,6 @@ class ZmqRos2Leader:
                     new_goal_configuration["joint_fake"],
                     new_goal_configuration["joint_lift"],
                     new_goal_configuration["joint_arm_l0"],
-                    # new_goal_configuration["joint_arm_l1"],
-                    # new_goal_configuration["joint_arm_l2"],
-                    # new_goal_configuration["joint_arm_l3"],
                 ]
             )
 
@@ -255,10 +252,6 @@ class ZmqRos2Leader:
             if verbose:
                 print(f"[IK TEST] Direct IK output:")
                 print(f"  joint_arm_l0: {new_goal_configuration['joint_arm_l0']:.4f}")
-                # print(f"  joint_arm_l1: {new_goal_configuration['joint_arm_l1']:.4f}")
-                # print(f"  joint_arm_l2: {new_goal_configuration['joint_arm_l2']:.4f}")
-                # print(f"  joint_arm_l3: {new_goal_configuration['joint_arm_l3']:.4f}")
-                print(f"  Total arm extension (sum): {np.sum(new_wrist_position_configuration[2:6]):.4f}")
 
             # Use exponential smoothing to filter the wrist
             # position configuration used to command the
@@ -286,9 +279,6 @@ class ZmqRos2Leader:
 
             new_goal_configuration["joint_lift"] = self.filtered_wrist_position_configuration[1]
             new_goal_configuration["joint_arm_l0"] = self.filtered_wrist_position_configuration[2]
-            # new_goal_configuration["joint_arm_l1"] = self.filtered_wrist_position_configuration[3]
-            # new_goal_configuration["joint_arm_l2"] = self.filtered_wrist_position_configuration[4]
-            # new_goal_configuration["joint_arm_l3"] = self.filtered_wrist_position_configuration[5]
 
             #################################
 
@@ -469,8 +459,6 @@ class ZmqRos2Leader:
             perf_last_obs_id = None
             perf_last_servo_seq = None
 
-        # last_robot_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        # offset_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         last_robot_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         offset_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         
@@ -500,13 +488,9 @@ class ZmqRos2Leader:
                 gripper_color_image = cv2.cvtColor(observation.ee_rgb, cv2.COLOR_RGB2BGR) # BGR
                 gripper_depth_image = observation.ee_depth.astype(np.float32)
 
-                # print('gripper cam shape', gripper_color_image.shape)
-                # gripper_cam_pose = observation.ee_camera_pose
-                # gripper_cam_K = observation.ee_camera_K
 
                 head_color_image = cv2.cvtColor(observation.rgb, cv2.COLOR_RGB2BGR)
                 # print('head cam shape', head_color_image.shape)
-                # print('depth scaling', observation.depth_scaling)
                 head_depth_image = observation.depth.astype(np.float32) 
 
                 if display_received_images:
@@ -664,9 +648,6 @@ class ZmqRos2Leader:
                             goal_configuration["base_x_joint"],
                             goal_configuration["joint_lift"],
                             goal_configuration["joint_arm_l0"],
-                            # goal_configuration["joint_arm_l1"],
-                            # goal_configuration["joint_arm_l2"],
-                            # goal_configuration["joint_arm_l3"],
                             goal_configuration["joint_wrist_yaw"],
                             goal_configuration["joint_wrist_pitch"],
                             goal_configuration["joint_wrist_roll"],

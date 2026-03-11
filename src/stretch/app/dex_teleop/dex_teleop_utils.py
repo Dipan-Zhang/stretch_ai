@@ -97,9 +97,6 @@ def format_actions(raw_actions: dict):
 def get_teleop_controlled_joints(teleop_mode: str):
     arm = [
         "joint_arm_l0",
-        # "joint_arm_l1",
-        # "joint_arm_l2",
-        # "joint_arm_l3",
         "joint_lift",
         "joint_wrist_yaw",
         "joint_wrist_pitch",
