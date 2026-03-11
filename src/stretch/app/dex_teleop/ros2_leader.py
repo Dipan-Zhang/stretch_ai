@@ -120,8 +120,7 @@ class ZmqRos2Leader:
             )
 
         # Get Wrist URDF joint limits
-        translation_urdf_file_name = "./stretch_base_translation_ik_with_fixed_wrist.urdf"
-        translation_urdf = dt_utils.load_urdf(translation_urdf_file_name)
+        translation_urdf = dt_utils.load_urdf(constants.MANIP_STRETCH_URDF)
         wrist_joints = ["joint_wrist_yaw", "joint_wrist_pitch", "joint_wrist_roll"]
         self.wrist_joint_limits = {}
         for joint_name in wrist_joints:
@@ -133,23 +132,14 @@ class ZmqRos2Leader:
 
         self.drop_extreme_wrist_orientation_change = True
 
-        # Initialize the filtered wrist orientation that is used to
-        # command the robot. Simple exponential smoothing is used to
-        # filter wrist orientation values coming from the interface
-        # objects.
-        self.filtered_wrist_orientation = np.array([0.0, 0.0, 0.0])
-
         # Initialize the filtered wrist position that is used to command
-        # the robot. Simple exponential smoothing is used to filter wrist
-        # position values coming from the interface objects.
+        # the robot.
+        self.filtered_wrist_orientation = np.array([0.0, 0.0, 0.0])
         self.filtered_wrist_position_configuration = np.array(
             [
                 starting_configuration["joint_mobile_base_rotate_by"],
                 starting_configuration["joint_lift"],
                 starting_configuration["joint_arm_l0"],
-                # starting_configuration["joint_arm_l1"],
-                # starting_configuration["joint_arm_l2"],
-                # starting_configuration["joint_arm_l3"],
             ]
         )
 
