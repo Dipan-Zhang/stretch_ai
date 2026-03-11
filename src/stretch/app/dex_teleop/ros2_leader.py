@@ -12,6 +12,7 @@ import time
 
 import cv2
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 import stretch.app.dex_teleop.dex_teleop_parameters as dt
 import stretch.app.dex_teleop.dex_teleop_utils as dt_utils
@@ -427,6 +428,23 @@ class ZmqRos2Leader:
 
         return new_goal_configuration
 
+    def get_commanded_ee_goal_pose(self, robot_pose: np.ndarray, gripper: float) -> np.ndarray:
+        """Compute the EE pose implied by the final joint-space command sent to arm_to()."""
+        q = np.zeros(self.robot._robot_model.dof)
+        q[HelloStretchIdx.BASE_X] = robot_pose[0]
+        q[HelloStretchIdx.LIFT] = robot_pose[1]
+        q[HelloStretchIdx.ARM] = robot_pose[2]
+        q[HelloStretchIdx.WRIST_YAW] = robot_pose[3]
+        q[HelloStretchIdx.WRIST_PITCH] = robot_pose[4]
+        q[HelloStretchIdx.WRIST_ROLL] = robot_pose[5]
+        q[HelloStretchIdx.GRIPPER] = gripper
+
+        ee_pos, ee_quat = self.robot._robot_model.manip_fk(q)
+        ee_goal_pose = np.eye(4)
+        ee_goal_pose[:3, :3] = Rotation.from_quat(ee_quat).as_matrix()
+        ee_goal_pose[:3, 3] = ee_pos
+        return ee_goal_pose
+
     def run(self, display_received_images, loop_rate: float = 10.0):
         loop_timer = lt.LoopStats("dex_teleop_leader")
 
@@ -688,6 +706,10 @@ class ZmqRos2Leader:
                                 }
                                 gripper_state = joint_states['gripper']
                                 gripper_state_normalized = normalize_gripper(gripper_state) # to [0, 1]
+                                commanded_ee_goal_pose = self.get_commanded_ee_goal_pose(
+                                    robot_pose,
+                                    goal_configuration["stretch_gripper"],
+                                )
                                 observation_dict = {
                                     "joint_states": joint_states,
                                     "ee_pose": observation.ee_pose.tolist(),
@@ -695,7 +717,7 @@ class ZmqRos2Leader:
                                 }
                                 action_dict = {
                                     "joint_goal_configuration": goal_configuration,
-                                    "ee_goal_pose": goal_dict['absolute_gripper_pose'].tolist(),
+                                    "ee_goal_pose": commanded_ee_goal_pose.tolist(),
                                     "gripper_goal": goal_dict["grip_width"].tolist(), # [0,1]
                                 }
                                 # Only record if the observation object is different from the last one we saved
@@ -706,7 +728,7 @@ class ZmqRos2Leader:
                                     ee_cam_K=observation.ee_camera_K,
                                     xyz=goal_dict["relative_gripper_position"],
                                     quaternion=goal_dict["relative_gripper_orientation"],
-                                    ee_goal_pose=goal_dict['absolute_gripper_pose'],
+                                    ee_goal_pose=commanded_ee_goal_pose,
                                     gripper=goal_dict["grip_width"],
                                     ee_pose=observation.ee_pose,
                                     observations=observation_dict,  # put actual states: ee_pose, normalized gripper
