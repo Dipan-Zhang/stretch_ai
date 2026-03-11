@@ -223,24 +223,13 @@ class ZmqRos2Leader:
         verbose: bool = False,
         **config,
     ):
-        current_joint_positions = self.robot.get_joint_positions()
-        full_body_cfg, success, info = self.robot._robot_model.manip_ik(
-            (wrist_position, gripper_orientation),
-            q0=current_joint_positions,
-        )
 
-        if full_body_cfg is None or not success:
-            new_goal_configuration = None
-        else:
-            manip_joint_positions = self.robot._extract_joint_pos(full_body_cfg)
-            new_goal_configuration = {
-                "joint_fake": full_body_cfg[HelloStretchIdx.BASE_X],
-                "joint_lift": full_body_cfg[HelloStretchIdx.LIFT],
-                "joint_arm_l0": manip_joint_positions[2],
-                "joint_wrist_yaw": full_body_cfg[HelloStretchIdx.WRIST_YAW],
-                "joint_wrist_pitch": full_body_cfg[HelloStretchIdx.WRIST_PITCH],
-                "joint_wrist_roll": full_body_cfg[HelloStretchIdx.WRIST_ROLL],
-            }
+        res, success, info = self.robot._robot_model.manip_ik_solver.compute_ik(
+            wrist_position,
+            gripper_orientation,
+            ignore_missing_joints=True,
+        )
+        new_goal_configuration = self.robot._robot_model.manip_ik_solver.q_array_to_dict(res)
 
         if not success:
             print("!!! BAD IK SOLUTION !!!")
@@ -253,24 +242,32 @@ class ZmqRos2Leader:
                 f"WARNING: IK failed to find a valid new_goal_configuration so skipping this iteration by continuing the loop. Input to IK: wrist_position = {wrist_position}, Output from IK: new_goal_configuration = {new_goal_configuration}"
             )
         else:
-            # Use the same aggregate manip joint representation as arm_to_ee_pose().
+            # TEST: Extract all 4 arm joints directly from IK without scaling
             new_wrist_position_configuration = np.array(
                 [
                     new_goal_configuration["joint_fake"],
                     new_goal_configuration["joint_lift"],
                     new_goal_configuration["joint_arm_l0"],
+                    # new_goal_configuration["joint_arm_l1"],
+                    # new_goal_configuration["joint_arm_l2"],
+                    # new_goal_configuration["joint_arm_l3"],
                 ]
+            )
+
+            # TEST: Comment out arm scaling to test direct IK usage
+            # Arm scaling
+            new_wrist_position_configuration[2] = (
+                new_wrist_position_configuration[2] * dt.ros2_arm_scaling_factor
             )
             
             # TEST: Print IK output for debugging
             if verbose:
                 print(f"[IK TEST] Direct IK output:")
-                print(f"  base_x: {new_goal_configuration['joint_fake']:.4f}")
-                print(f"  lift: {new_goal_configuration['joint_lift']:.4f}")
-                print(f"  arm: {new_goal_configuration['joint_arm_l0']:.4f}")
-                print(f"  wrist_yaw: {new_goal_configuration['joint_wrist_yaw']:.4f}")
-                print(f"  wrist_pitch: {new_goal_configuration['joint_wrist_pitch']:.4f}")
-                print(f"  wrist_roll: {new_goal_configuration['joint_wrist_roll']:.4f}")
+                print(f"  joint_arm_l0: {new_goal_configuration['joint_arm_l0']:.4f}")
+                # print(f"  joint_arm_l1: {new_goal_configuration['joint_arm_l1']:.4f}")
+                # print(f"  joint_arm_l2: {new_goal_configuration['joint_arm_l2']:.4f}")
+                # print(f"  joint_arm_l3: {new_goal_configuration['joint_arm_l3']:.4f}")
+                print(f"  Total arm extension (sum): {np.sum(new_wrist_position_configuration[2:6]):.4f}")
 
             # Use exponential smoothing to filter the wrist
             # position configuration used to command the
@@ -669,6 +666,19 @@ class ZmqRos2Leader:
                     )
 
                     if not clutched:
+                        last_robot_pose = robot_pose
+
+                        # add clutch offset
+                        robot_pose += offset_pose
+
+                        self.robot.arm_to(
+                            robot_pose,
+                            gripper=goal_configuration["stretch_gripper"], # [Gripper_MIN, Gripper_MAX]
+                            head=constants.look_at_ee,
+                            blocking=False,  # We set this flag to False to make sure it doesn't block
+                            reliable=False,  # We set this flag to False so we dont wait for receipt
+                        )
+
                         # Prep joint states as dict
                         if self._recording and self.prev_goal_dict is not None:
                             current_servo_seq = servo_seq
@@ -705,18 +715,6 @@ class ZmqRos2Leader:
                                     head_depth=head_depth_image,
                                     head_cam_pose=observation.camera_pose,
                                     head_cam_K=observation.camera_K,
-                                )
-
-                                last_robot_pose = robot_pose
-                                # add clutch offset
-                                robot_pose += offset_pose
-
-                                self.robot.arm_to(
-                                    robot_pose,
-                                    gripper=goal_configuration["stretch_gripper"], # [Gripper_MIN, Gripper_MAX]
-                                    head=constants.look_at_ee,
-                                    blocking=False,  # We set this flag to False to make sure it doesn't block
-                                    reliable=False,  # We set this flag to False so we dont wait for receipt
                                 )
                                 if self.perf_debug:
                                     perf_record_count += 1  # Increment recording counter
