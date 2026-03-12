@@ -391,7 +391,7 @@ class ROS2LfdLeaderEgoasis:
                     if self.add_noise_to_action:
                         # Add uniform random noise in [-1, 1] to action indices 0 and 2 (x and z positions)
                         noise = torch.rand(2, device=outputs['selected_action'].device) * 2 - 1
-                        outputs['selected_action'][[0, 2]] += 0.035 * noise
+                        outputs['selected_action'][[0, 2]] += 0.05 * noise
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
 
                 pos, quat, gripper, _ = action[:3], action[3:7], action[7], action[-1]

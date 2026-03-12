@@ -49,7 +49,7 @@ PROGRESS_TH=0.9
 GRIPPER_GOAL_SIZE = (240, 320) # H,W
 HEAD_GOAL_SIZE = (320, 240) # H,W
 DEBUG_OFFSET = np.array([0,0.0,0.0])
-HOME_POS = np.array([-0.025, -0.35, 0.85])
+HOME_POS = np.array([-0.025, -0.35, 0.65])
 
 class ROS2LfdLeader:
     """ROS2 version of leader for evaluating trained LfD policies with Stretch. To be used in conjunction with stretch_ros2_bridge server"""
@@ -444,16 +444,6 @@ class ROS2LfdLeader:
                     stop = True
 
                 if stop:
-                    if self._recording:
-                        if self.record_success:
-                            success = ask_for_input("Was the episode successful?")
-                            print("[LEADER] Writing data to disk with success = ", success)
-                            self._recorder.write(success=success)
-                        else:
-                            print("[LEADER] Writing data to disk.")
-                            self._recorder.write()
-                    else:
-                        print("[LEADER] Not recording. Skipping writing data to disk.")
                     
                     # Reset current_pose for relative motion mode after writing
                     if self.relative_motion:
@@ -480,6 +470,16 @@ class ROS2LfdLeader:
                         break
                 
         finally:
+            if self._recording:
+                if self.record_success:
+                    success = ask_for_input("Was the episode successful?")
+                    print("[LEADER] Writing data to disk with success = ", success)
+                    self._recorder.write(success=success)
+                else:
+                    print("[LEADER] Writing data to disk.")
+                    self._recorder.write()
+            else:
+                print("[LEADER] Not recording. Skipping writing data to disk.")
             # Go to initial pose, open the gripper
             if ask_for_input("Open the gripper?"):
                 self.robot.arm_to_ee_pose(
