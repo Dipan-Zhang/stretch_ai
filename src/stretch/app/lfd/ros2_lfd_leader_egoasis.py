@@ -85,13 +85,15 @@ class ROS2LfdLeaderEgoasis:
         {   
             "cfg": None,
             "weight_ckpt": None,
-            "action_chunk_size": 8,
+            "action_chunk_size": 15,
             # "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_relaction_meta.npz",
             # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
             "policy_only": True,
             "device": "cuda",
         },
         loop_rate: int = 10,
+        episode_max_step: int = 300,
+        add_noise_to_action: bool = False,
     ):
         self.robot = robot
         self.policy_kwargs = edict(policy_kwargs)
@@ -101,6 +103,8 @@ class ROS2LfdLeaderEgoasis:
         self.record_success = record_success
         self.verbose = verbose
         self.loop_rate = loop_rate
+        self.add_noise_to_action = add_noise_to_action
+        self.episode_max_step = episode_max_step
         # Save metadata to pass to recorder
         if logging_cfg is not None:
             instruction = logging_cfg.instruction
@@ -114,6 +118,7 @@ class ROS2LfdLeaderEgoasis:
                 "policy_name": 'egoasis',
                 "teleop_mode": self.teleop_mode,
                 "policy_kwargs": self.policy_kwargs,
+                "episode_max_step": self.episode_max_step,
             }
         else:
             self.metadata = {
@@ -125,6 +130,7 @@ class ROS2LfdLeaderEgoasis:
                 "policy_name": 'egoasis',
                 "teleop_mode": self.teleop_mode,
                 "policy_kwargs": self.policy_kwargs,
+                "episode_max_step": self.episode_max_step,
             }
 
         self._recording = recording
@@ -134,6 +140,7 @@ class ROS2LfdLeaderEgoasis:
             )
         else:
             self._recorder = None
+        
         self.policy = PolicyVLAWorldModelWrapperStretchRobot(
             cfg=self.policy_kwargs.cfg,
             weight_ckpt=self.policy_kwargs.weight_ckpt,
@@ -199,6 +206,49 @@ class ROS2LfdLeaderEgoasis:
         }
         return obs
     
+
+    def wait_for_mission_start(self) -> bool:
+        """
+        Display standby mode with camera feed and wait for user input.
+        
+        Returns:
+            True if mission should start (SPACEBAR pressed), False if cancelled (ESC pressed)
+        """
+        print("Robot is in standby mode. Press SPACEBAR to start the mission, or ESC to exit.")
+        mission_started = False
+        while not mission_started:
+            # Get observation to show current camera feed
+            obs = self.prepare_observation()
+            gripper_image = obs["observation.images.gripper"]
+            
+            # Create a combined view for standby mode
+            gripper_image_bgr = cv2.cvtColor(gripper_image, cv2.COLOR_RGB2BGR)
+            gripper_resized = cv2.resize(gripper_image_bgr, (320, 240))
+
+            cv2.putText(gripper_resized, "STANDBY - Press SPACE to start", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
+            cv2.imshow("Standby Mode - Press SPACE to start mission", gripper_resized)
+            
+            # Check for key press
+            key = cv2.waitKey(1) & 0xFF
+            if key == 32:  # SPACEBAR
+                self.policy.reset()
+                time.sleep(0.1)
+                print("Mission started!")
+                mission_started = True
+                cv2.destroyAllWindows()
+                time.sleep(0.1)
+                return True
+            
+            elif key == 27:  # ESC
+                print("Mission cancelled by user.")
+                cv2.destroyAllWindows()
+                return False
+            
+            # Keep robot in standby pose
+            time.sleep(0.1)  # Small delay to prevent excessive CPU usage
+        
+        return True
 
     def visualize_action(self, obs, outputs, visualize_3d: bool = False):
         current_state = obs["observation.state"].copy()
@@ -303,9 +353,6 @@ class ROS2LfdLeaderEgoasis:
             cv2.imshow("projected actions", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
             cv2.waitKey(1)
 
-
-
-
     def run(self) -> dict:
         """Take in image data and other data received by the robot and process it appropriately. Will parse the new observations, predict future actions and send the next action to the robot, and save everything to disk."""
         loop_timer = lt.LoopStats("lfd_leader_egoasis")
@@ -327,39 +374,10 @@ class ROS2LfdLeaderEgoasis:
 
         try:
             # Take keyboard input to start the mission, otherwise the robot will be in standby mode
-            print("Robot is in standby mode. Press SPACEBAR to start the mission, or ESC to exit.")
-            mission_started = False
-            while not mission_started:
-                # Get observation to show current camera feed
-                obs = self.prepare_observation()
-                gripper_image = obs["observation.images.gripper"]
-                
-                # Create a combined view for standby mode
-                gripper_image_bgr = cv2.cvtColor(gripper_image, cv2.COLOR_RGB2BGR)
-                gripper_resized = cv2.resize(gripper_image_bgr, (320, 240))
+            if not self.wait_for_mission_start():
+                return {}
 
-                cv2.putText(gripper_resized, "STANDBY - Press SPACE to start", (10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
-                cv2.imshow("Standby Mode - Press SPACE to start mission", gripper_resized)
-                
-                # Check for key press
-                key = cv2.waitKey(1) & 0xFF
-                if key == 32:  # SPACEBAR
-                    self.policy.reset()
-                    time.sleep(0.1)
-                    print("Mission started!")
-                    mission_started = True
-                    cv2.destroyAllWindows()
-                    time.sleep(0.1)
-                    break
-                
-                elif key == 27:  # ESC
-                    print("Mission cancelled by user.")
-                    return {}
-                
-                # Keep robot in standby pose
-                time.sleep(0.1)  # Small delay to prevent excessive CPU usage
-
+            episode_step = 0
             while True:
                 loop_timer.mark_start()
 
@@ -370,14 +388,13 @@ class ROS2LfdLeaderEgoasis:
                 action = None
                 with torch.inference_mode():
                     outputs = self.policy.inference(obs, action_only=True, align_to_current_state=False) # relative cartesian pose xyz, quaternion wxyz
+                    if self.add_noise_to_action:
+                        # Add uniform random noise in [-1, 1] to action indices 0 and 2 (x and z positions)
+                        noise = torch.rand(2, device=outputs['selected_action'].device) * 2 - 1
+                        outputs['selected_action'][[0, 2]] += 0.035 * noise
                     action = outputs['selected_action'].cpu().numpy() # [ACTION_DIM]
-                # print(f'===================> inference time: {time.time() - time_start:.3f}s')
-                pos, quat, gripper, progress = action[:3], action[3:7], action[7], action[-1]
 
-                # history_gripper = obs["observation.state"][16]
-                # action_chunk_gripper = outputs["latest_action_chunk"][:, 7].cpu().numpy().copy().astype(np.float32)
-                # print(f"===================> {history_gripper:.3f}=, {gripper:.3f}=, {action_chunk_gripper}= ")
-                print(f'===================> gripper={gripper}, progress={progress}')
+                pos, quat, gripper, _ = action[:3], action[3:7], action[7], action[-1]
                 gripper = unnormalize_gripper(gripper)
 
                 if self._recording:
@@ -408,27 +425,13 @@ class ROS2LfdLeaderEgoasis:
                     print(f'===================> sleep time is negative: {sleep_time:.3f}s, skipping sleep')
                 precise_sleep(max(sleep_time, 0)) # sleep for 0.1s to maintain loop rate
                 
-                # stop = False
-                # if action[8] >= PROGRESS_TH:
-                #     print('task succeed!')
-                #     stop = True
-
                 if self.verbose:
                     self.visualize_action(obs, outputs, visualize_3d=False)
-
                 
-                # if stop:
-                #     if self._recording:
-                #         if self.record_success:
-                #             success = ask_for_input("Was the episode successful?")
-                #             print("[LEADER] Writing data to disk with success = ", success)
-                #             self._recorder.write(success=success)
-                #         else:
-                #             print("[LEADER] Writing data to disk.")
-                #             self._recorder.write()
-                #     else:
-                #         print("[LEADER] Not recording. Skipping writing data to disk.")
-                #     break
+                episode_step += 1
+                if episode_step >= self.episode_max_step:
+                    print(f'===================> episode step {episode_step} >= episode max steps {self.episode_max_step}, stopping episode')
+                    break
                     
         finally:
             if self._recording:
@@ -487,6 +490,9 @@ if __name__ == "__main__":
     parser.add_argument("--relative_motion", action="store_true", help="Use relative motion.")
     parser.add_argument("--loop_rate", type=int, default=10, help="Loop rate in Hz.")
     parser.add_argument("--instruction", type=str, default="pick-and-place")
+    parser.add_argument("--add_noise_to_action", action="store_true", help="Add noise to action.")
+    parser.add_argument("--episode_max_step", type=int, default=300, help="Maximum number of steps per episode.")
+
     args = parser.parse_args()
 
     # Parameters
@@ -524,7 +530,7 @@ if __name__ == "__main__":
             "cfg": policy_cfg,
             "weight_ckpt": args.ckpt,
             "action_chunk_size": 15,
-            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_PnP-Sponge_actionInworld_statistics.npz",
+            "action_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_PnP-Basketball_actionInworld_statistics.npz",
             "policy_only": True,
             "state_meta_fpath": None,
             # "state_meta_fpath": "/home/chenh/hanzhi_ws/egoasis3D/assets/stretchrobot_pickupbottle_state_meta.npz",
@@ -532,6 +538,8 @@ if __name__ == "__main__":
         },
         relative_motion=args.relative_motion,
         loop_rate=args.loop_rate,
+        episode_max_step=args.episode_max_step,
+        add_noise_to_action=args.add_noise_to_action,
     )
 
     try:
