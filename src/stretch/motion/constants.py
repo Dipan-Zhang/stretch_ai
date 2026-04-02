@@ -108,7 +108,7 @@ STRETCH_OBS_PREGRASP_Q = np.array(
         0.01,  # arm
         0.0,  # gripper rpy
         0.0,  # wrist roll
-        0.0,  # wrist pitch
+        -0.57, # wrist pitch
         0.0,  # wrist yaw
         -np.pi / 2,  # head pan, camera to face the arm
         -np.pi / 4,
